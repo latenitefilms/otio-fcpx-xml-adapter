@@ -18,6 +18,10 @@ The GitHub repo is here:
 
 https://github.com/AcademySoftwareFoundation/OpenTimelineIO
 
+However you can find the latest OpenTimelineIO Repo locally in:
+
+    - `llm-resources/OpenTimelineIO`
+
 ---
 
 ## Resources
