@@ -129,9 +129,11 @@ class FcpxOtio:
     FCP X XML
     """
 
-    def __init__(self, otio_timeline):
+    def __init__(self, otio_timeline, fcpxml_version="1.14"):
         self.otio_timeline = otio_timeline
-        self.fcpx_xml = cElementTree.Element("fcpxml", version="1.8")
+        self.fcpx_xml = cElementTree.Element(
+            "fcpxml", version=fcpxml_version
+        )
         self.resource_element = cElementTree.SubElement(
             self.fcpx_xml,
             "resources"
@@ -253,10 +255,12 @@ class FcpxOtio:
                 lane_id,
                 compound=compound
             )
+            if child_element is None:
+                continue
             if not lane_id:
                 spine.append(child_element)
                 continue
-            if child.schema_name() == "Gap":
+            if child.schema_name() in ("Gap", "Transition"):
                 continue
 
             parent_element = self._find_parent_element(
@@ -342,10 +346,13 @@ class FcpxOtio:
         )
         total, rate = format_element.get("frameDuration").split("/")
         rate = rate.replace("s", "")
-        return int(float(rate) / float(total))
+        return round(float(rate) / float(total))
 
     def _element_for_item(self, item, lane, ref_only=False, compound=False):
         element = None
+        if item.schema_name() == "Transition":
+            return self._element_for_transition(item)
+
         duration = self._calculate_rational_number(
             item.duration().value,
             item.duration().rate
@@ -364,6 +371,8 @@ class FcpxOtio:
             return None
         if lane:
             element.set("lane", str(lane))
+        if hasattr(item, 'enabled') and not item.enabled:
+            element.set("enabled", "0")
         for marker in item.markers:
             marker_attribs = {
                 "start": from_rational_time(marker.marked_range.start_time),
@@ -384,7 +393,7 @@ class FcpxOtio:
     def _lanable_items(self, items):
         return [
             item for item in items
-            if item.schema_name() in ["Gap", "Stack", "Clip"]
+            if item.schema_name() in ["Gap", "Stack", "Clip", "Transition"]
         ]
 
     def _element_for_clip(self, item, asset_id, duration, lane):
@@ -433,6 +442,72 @@ class FcpxOtio:
             if lane:
                 audio.set("lane", str(lane))
         return element
+
+    def _element_for_transition(self, item):
+        total_duration = item.in_offset + item.out_offset
+        duration = self._calculate_rational_number(
+            total_duration.value,
+            total_duration.rate
+        )
+        offset = from_rational_time(
+            item.trimmed_range_in_parent().start_time
+        )
+        element = cElementTree.Element(
+            "transition",
+            {
+                "name": item.name,
+                "offset": offset,
+                "duration": duration
+            }
+        )
+        fcpx_meta = item.metadata.get("fcpx", {})
+        if "filter_video" in fcpx_meta:
+            fv = fcpx_meta["filter_video"]
+            effect_ref = self._find_or_create_effect_resource(
+                fv.get("name", ""), fv.get("ref", "")
+            )
+            fv_element = cElementTree.SubElement(
+                element,
+                "filter-video",
+                {
+                    "ref": effect_ref,
+                    "name": fv.get("name", "")
+                }
+            )
+            for param in fv.get("params", []):
+                cElementTree.SubElement(fv_element, "param", dict(param))
+        if "filter_audio" in fcpx_meta:
+            fa = fcpx_meta["filter_audio"]
+            effect_ref = self._find_or_create_effect_resource(
+                fa.get("name", ""), fa.get("ref", "")
+            )
+            cElementTree.SubElement(
+                element,
+                "filter-audio",
+                {
+                    "ref": effect_ref,
+                    "name": fa.get("name", "")
+                }
+            )
+        return element
+
+    def _find_or_create_effect_resource(self, name, original_ref):
+        existing = self.resource_element.find(
+            f"./effect[@name='{name}']"
+        )
+        if existing is not None:
+            return existing.get("id")
+        effect_id = self._resource_id_generator()
+        cElementTree.SubElement(
+            self.resource_element,
+            "effect",
+            {
+                "id": effect_id,
+                "name": name,
+                "uid": original_ref
+            }
+        )
+        return effect_id
 
     def _element_for_gap(self, item, duration):
         element = cElementTree.Element(
@@ -778,8 +853,15 @@ class FcpxXml:
             return self._from_clips()
 
     def _from_library(self):
-        # We are just grabbing the first even in the project for now
-        return self._from_event(self.fcpx_xml.find("./library/event"))
+        events = self.fcpx_xml.findall("./library/event")
+        if len(events) == 1:
+            return self._from_event(events[0])
+        container = otio.schema.SerializableCollection(
+            name=self.fcpx_xml.find("./library").get("location", "")
+        )
+        for event in events:
+            container.append(self._from_event(event))
+        return container
 
     def _from_event(self, event_element):
         container = otio.schema.SerializableCollection(
@@ -821,17 +903,18 @@ class FcpxXml:
         timeline_items = []
         lanes = []
         stack = otio.schema.Stack(name=name, source_range=source_range)
+        default_format = sequence_element.get("format")
         for element in sequence_element.iter():
             if element.tag not in COMPOSABLE_ELEMENTS:
                 continue
             composable = self._build_composable(
                 element,
-                sequence_element.get("format")
+                default_format
             )
 
             offset, lane = self._offset_and_lane(
                 element,
-                sequence_element.get("format")
+                default_format
             )
 
             timeline_items.append(
@@ -839,11 +922,38 @@ class FcpxXml:
                     "track": lane,
                     "offset": offset,
                     "composable": composable,
-                    "audio_only": self._audio_only(element)
+                    "audio_only": self._audio_only(element),
+                    "is_transition": False
                 }
             )
 
             lanes.append(lane)
+
+        # Collect transitions from spines
+        for spine_el in sequence_element.iter("spine"):
+            spine_lane = spine_el.get("lane", "0")
+            if self.child_parent_map.get(spine_el) == sequence_element:
+                spine_lane = "0"
+            for trans_el in spine_el.findall("transition"):
+                transition = self._build_transition(
+                    trans_el, default_format
+                )
+                offset = to_rational_time(
+                    trans_el.get("offset"),
+                    self._format_frame_rate(default_format)
+                )
+                timeline_items.append(
+                    {
+                        "track": spine_lane,
+                        "offset": offset,
+                        "composable": transition,
+                        "audio_only": False,
+                        "is_transition": True
+                    }
+                )
+                if spine_lane not in lanes:
+                    lanes.append(spine_lane)
+
         sorted_lanes = list(set(lanes))
         sorted_lanes.sort()
         for lane in sorted_lanes:
@@ -854,6 +964,9 @@ class FcpxXml:
             )
 
             for item in sorted_items:
+                if item["is_transition"]:
+                    track.append(item["composable"])
+                    continue
                 frame_diff = (
                     int(item["offset"].value) - track.duration().value
                 )
@@ -862,7 +975,7 @@ class FcpxXml:
                         self._create_gap(
                             0,
                             frame_diff,
-                            sequence_element.get("format")
+                            default_format
                         )
                     )
                 track.append(item["composable"])
@@ -893,12 +1006,56 @@ class FcpxXml:
                 source_range=source_range
             )
 
+        if timing_clip.get("enabled", "1") == "0":
+            otio_composable.enabled = False
+
         for marker in timing_clip.findall(".//marker"):
             otio_composable.markers.append(
                 self._marker(marker, default_format)
             )
 
         return otio_composable
+
+    def _build_transition(self, element, default_format):
+        fps = self._format_frame_rate(default_format)
+        duration = to_rational_time(element.get("duration"), fps)
+        half_dur = otio.opentime.RationalTime(
+            round(duration.value / 2), duration.rate
+        )
+
+        # Determine transition type from filter-video effect
+        transition_type = ""
+        metadata = {}
+        filter_video = element.find("filter-video")
+        if filter_video is not None:
+            effect_name = filter_video.get("name", "")
+            effect_ref = filter_video.get("ref", "")
+            if "Dissolve" in effect_name:
+                transition_type = otio.schema.TransitionTypes.SMPTE_Dissolve
+            else:
+                transition_type = otio.schema.TransitionTypes.Custom
+            params = []
+            for param in filter_video.findall("param"):
+                params.append(dict(param.attrib))
+            metadata["filter_video"] = {
+                "name": effect_name,
+                "ref": effect_ref,
+                "params": params
+            }
+        filter_audio = element.find("filter-audio")
+        if filter_audio is not None:
+            metadata["filter_audio"] = {
+                "name": filter_audio.get("name", ""),
+                "ref": filter_audio.get("ref", "")
+            }
+
+        return otio.schema.Transition(
+            name=element.get("name", ""),
+            transition_type=transition_type,
+            in_offset=half_dur,
+            out_offset=half_dur,
+            metadata={"fcpx": metadata}
+        )
 
     def _marker(self, element, default_format):
         if element.get("completed", None) and element.get("completed") == "1":
@@ -1000,7 +1157,16 @@ class FcpxXml:
 
     def _reference_from_id(self, asset_id, default_format):
         asset = self._asset_by_id(asset_id)
-        if not asset.get("src", ""):
+        src = asset.get("src", "")
+        if not src:
+            media_rep = asset.find(
+                "./media-rep[@kind='original-media']"
+            )
+            if media_rep is None:
+                media_rep = asset.find("./media-rep")
+            if media_rep is not None:
+                src = media_rep.get("src", "")
+        if not src:
             return otio.schema.MissingReference()
 
         available_range = otio.opentime.TimeRange(
@@ -1022,7 +1188,7 @@ class FcpxXml:
         if asset_clip:
             metadata = self._create_metadta(asset_clip)
         return otio.schema.ExternalReference(
-            target_url=asset.get("src"),
+            target_url=src,
             available_range=available_range,
             metadata={"fcpx": metadata}
         )
@@ -1054,7 +1220,7 @@ class FcpxXml:
 
     def _format_frame_rate(self, format_id):
         fd_total, fd_rate = self._format_frame_duration(format_id)
-        return int(float(fd_rate) / float(fd_total))
+        return round(float(fd_rate) / float(fd_total))
 
     def _number_of_frames(self, time_value, format_id):
         if time_value == "0s" or time_value is None:
@@ -1124,7 +1290,10 @@ class FcpxXml:
     @staticmethod
     def _sorted_items(lane, otio_objects):
         lane_items = [item for item in otio_objects if item["track"] == lane]
-        return sorted(lane_items, key=lambda k: k["offset"])
+        return sorted(
+            lane_items,
+            key=lambda k: (k["offset"], 0 if k.get("is_transition") else 1)
+        )
 
 
 # --------------------
@@ -1144,15 +1313,16 @@ def read_from_string(input_str):
     return FcpxXml(input_str).to_otio()
 
 
-def write_to_string(input_otio):
+def write_to_string(input_otio, fcpxml_version="1.14"):
     """
     Necessary write method for otio adapter
 
     Args:
         input_otio (OpenTimeline): An OpenTimeline object
+        fcpxml_version (str): The FCPXML version to write (default "1.14")
 
     Returns:
         str: The string contents of an FCP X XML
     """
 
-    return FcpxOtio(input_otio).to_xml()
+    return FcpxOtio(input_otio, fcpxml_version=fcpxml_version).to_xml()
