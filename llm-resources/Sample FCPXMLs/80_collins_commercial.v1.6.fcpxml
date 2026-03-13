@@ -1,0 +1,60 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<!DOCTYPE fcpxml>
+
+<fcpxml version="1.6">
+    <resources>
+        <format id="r1" name="FFVideoFormat1080p25" frameDuration="100/2500s" width="1920" height="1080"/>
+        <asset id="r2" name="A002C012_170718_R2IQ" uid="FDAED3184D0DD6B3FE8910431F1EC18B" src="file:///Volumes/LNF-H10146/Jared%20Editing/LNF-J10271%20-%2080%20Collins/01%20-%20Rushes/20170718%20-%20Day%2001/Card%20002/A002R2IQ/A002C012_170718_R2IQ.mov" start="197993/25s" duration="1564/25s" hasVideo="1" format="r3" customLogOverride="ARRI_LogC_3DLUT"/>
+        <format id="r3" name="FFVideoFormat2048x1152p25" frameDuration="100/2500s" width="2048" height="1152"/>
+        <effect id="r4" name="Alex4D Adjustment Layer" uid="~/Titles.localized/Alex4D/Alex4D Adjustment Layer/Alex4D Adjustment Layer.moti" src="file:///Users/jareddaperis/Movies/Motion%20Templates.localized/Titles.localized/Alex4D/Alex4D%20Adjustment%20Layer/Alex4D%20Adjustment%20Layer.moti"/>
+        <effect id="r5" name="FilmConvertPro2" uid="/Library/Application Support/Final Cut Pro/Templates.localized/Effects.localized/Film Emulation/FilmConvertPro2/FilmConvertPro2.moef" src="file:///Library/Application%20Support/Final%20Cut%20Pro/Templates.localized/Effects.localized/Film%20Emulation/FilmConvertPro2/FilmConvertPro2.moef"/>
+        <effect id="r6" name="Alex4D Grow-Shrink" uid="~/Effects.localized/Alex4D/Alex4D Grow-Shrink/Alex4D Grow-Shrink.moef" src="file:///Users/jareddaperis/Movies/Motion%20Templates.localized/Effects.localized/Alex4D/Alex4D%20Grow-Shrink/Alex4D%20Grow-Shrink.moef"/>
+        <asset id="r7" name="A001C008_170718_R2IQ" uid="31F3842DC2C5F3A48D369D607C0238D0" src="file:///Volumes/LNF-H10146/Jared%20Editing/LNF-J10271%20-%2080%20Collins/01%20-%20Rushes/20170718%20-%20Day%2001/Card%20001/A001R2IQ/A001C008_170718_R2IQ.mov" start="38912/25s" duration="883/25s" hasVideo="1" format="r3" customLogOverride="ARRI_LogC_3DLUT"/>
+        <asset id="r8" name="A001C066_170718_R2IQ" uid="09EB6F2CAE7F0A363FE9C0BED50337C5" src="file:///Volumes/LNF-H10146/Jared%20Editing/LNF-J10271%20-%2080%20Collins/01%20-%20Rushes/20170718%20-%20Day%2001/Card%20001/A001R2IQ/A001C066_170718_R2IQ.mov" start="105306/25s" duration="404/25s" hasVideo="1" format="r3" customLogOverride="ARRI_LogC_3DLUT"/>
+        <asset id="r9" name="A001C062_170718_R2IQ" uid="40F48B8DB9D93884A78D79A1DC913C81" src="file:///Volumes/LNF-H10146/Jared%20Editing/LNF-J10271%20-%2080%20Collins/01%20-%20Rushes/20170718%20-%20Day%2001/Card%20001/A001R2IQ/A001C062_170718_R2IQ.mov" start="101720/25s" duration="862/25s" hasVideo="1" format="r3" customLogOverride="ARRI_LogC_3DLUT"/>
+        <asset id="r10" name="A001C063_170718_R2IQ" uid="176D50F8DF520C723B86DEFB8432B7B4" src="file:///Volumes/LNF-H10146/Jared%20Editing/LNF-J10271%20-%2080%20Collins/01%20-%20Rushes/20170718%20-%20Day%2001/Card%20001/A001R2IQ/A001C063_170718_R2IQ.mov" start="102582/25s" duration="185/25s" hasVideo="1" format="r3" customLogOverride="ARRI_LogC_3DLUT"/>
+    </resources>
+    <library location="file:///Volumes/LNF-H10146/Jared%20Editing/LNF-J10271%20-%2080%20Collins/02%20-%20Final%20Cut%20Pro/01%20-%20Projects/LNF-J10271%20-%2080%20Collins.fcpbundle/">
+        <event name="Assets" uid="7BCFCE80-BFE8-40FF-B6EE-C46F5A69F7F3">
+            <project name="80 Collins - Commercial 2 - Edit 2" uid="B509D1CC-3AB3-484F-95D0-84BBFCF671CF" modDate="2017-08-10 00:59:21 +1000">
+                <sequence duration="89900/2500s" format="r1" renderColorSpace="Rec. 709" tcStart="0s" tcFormat="NDF" audioLayout="stereo" audioRate="48k">
+                    <spine>
+                        <asset-clip name="A002C012_170718_R2IQ" offset="0s" ref="r2" duration="6300/2500s" start="19866800/2500s" format="r3" tcFormat="NDF">
+                            <title name="Alex4D Adjustment Layer" lane="1" offset="238401600/30000s" ref="r4" duration="75600/30000s" start="108534000/30000s">
+                                <filter-video ref="r5" name="FilmConvertPro2">
+                                    <param name="Temperature" key="9999/10003/10007/3/10010/4" value="5600"/>
+                                    <param name="Convert to" key="9999/10003/10007/3/10010/5" value="14 (FJ H400 Pro)"/>
+                                    <param name="Film Color" key="9999/10003/10007/3/10010/7" value="0"/>
+                                    <param name="Grain" key="9999/10003/10007/3/10010/9" value="50"/>
+                                </filter-video>
+                            </title>
+                            <keyword start="197993/25s" duration="1564/25s" value="- day 1, day 01 - card 02"/>
+                            <keyword start="198182/25s" duration="247/25s" value="jared selects"/>
+                            <marker start="198682/25s" duration="100/2500s" value="Marker 69"/>
+                            <filter-video ref="r6" name="Alex4D Grow-Shrink"/>
+                        </asset-clip>
+                        <asset-clip name="A001C008_170718_R2IQ" offset="6300/2500s" ref="r7" duration="231/25s" start="39026/25s" format="r3" tcFormat="NDF">
+                            <keyword start="38912/25s" duration="883/25s" value="- day 1, day 01 - card 01"/>
+                        </asset-clip>
+                        <asset-clip name="A001C066_170718_R2IQ" offset="29400/2500s" ref="r8" duration="139/25s" start="105535/25s" format="r3" tcFormat="NDF">
+                            <keyword start="105306/25s" duration="404/25s" value="- day 1, day 01 - card 01"/>
+                        </asset-clip>
+                        <asset-clip name="A001C062_170718_R2IQ" offset="43300/2500s" ref="r9" duration="361/25s" start="101973/25s" format="r3" tcFormat="NDF">
+                            <keyword start="20344/5s" duration="862/25s" value="- day 1, day 01 - card 01"/>
+                        </asset-clip>
+                        <asset-clip name="A001C063_170718_R2IQ" offset="79400/2500s" ref="r10" duration="105/25s" start="102602/25s" format="r3" tcFormat="NDF">
+                            <adjust-transform scale="1.13 1.13"/>
+                            <keyword start="102582/25s" duration="185/25s" value="- day 1, day 01 - card 01, jared selects"/>
+                        </asset-clip>
+                    </spine>
+                </sequence>
+            </project>
+        </event>
+        <smart-collection name="01 - Projects" match="all">
+            <match-clip rule="is" type="project"/>
+        </smart-collection>
+        <smart-collection name="02 - Favorites" match="all">
+            <match-ratings value="favorites"/>
+        </smart-collection>
+    </library>
+</fcpxml>
