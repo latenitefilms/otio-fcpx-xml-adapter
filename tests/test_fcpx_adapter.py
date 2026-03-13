@@ -12,13 +12,17 @@ import xml.etree.ElementTree as ET
 import opentimelineio as otio
 import pytest
 
-from otio_fcpx_xml_adapter.fcpx_xml import META_NAMESPACE, format_name
+from otio_fcpx_xml_adapter.fcpx_xml import (
+    META_NAMESPACE,
+    SUPPORTED_VERSIONS,
+    format_name,
+)
 
 
 TEST_DIR = Path(__file__).resolve().parent
 ROOT_DIR = TEST_DIR.parent
 SAMPLE_DIR = TEST_DIR / "sample_data"
-DTD_PATH = ROOT_DIR / "llm-resources" / "DTDs" / "FCPXMLv1_14.dtd"
+DTD_DIR = ROOT_DIR / "llm-resources" / "DTDs"
 
 SAMPLE_LIBRARY_XML = SAMPLE_DIR / "fcpx_library.fcpxml"
 SAMPLE_PROJECT_XML = SAMPLE_DIR / "fcpx_project.fcpxml"
@@ -100,7 +104,11 @@ def first_non_gap(track):
     return next(item for item in track if not isinstance(item, otio.schema.Gap))
 
 
-def assert_v114_valid(xml_string):
+def dtd_path_for_version(version):
+    return DTD_DIR / "FCPXMLv{}.dtd".format(version.replace(".", "_"))
+
+
+def assert_valid_for_version(xml_string, version):
     xmllint = shutil.which("xmllint")
     if not xmllint:
         pytest.skip("xmllint is required for DTD validation")
@@ -113,7 +121,7 @@ def assert_v114_valid(xml_string):
 
     try:
         result = subprocess.run(
-            [xmllint, "--noout", "--dtdvalid", str(DTD_PATH), str(temp_path)],
+            [xmllint, "--noout", "--dtdvalid", str(dtd_path_for_version(version)), str(temp_path)],
             capture_output=True,
             text=True,
             check=False,
@@ -122,6 +130,10 @@ def assert_v114_valid(xml_string):
         temp_path.unlink(missing_ok=True)
 
     assert result.returncode == 0, result.stderr
+
+
+def assert_v114_valid(xml_string):
+    assert_valid_for_version(xml_string, "1.14")
 
 
 def make_external_clip(name, duration_frames=48, rate=24, target_url=None):
@@ -266,10 +278,188 @@ def test_version_1_14_media_rep_enabled_and_v14_write():
     assert roundtrip.video_tracks()[0][1].enabled is False
 
 
-def test_write_rejects_non_v114_versions():
+def test_write_rejects_unsupported_version_numbers():
     timeline = read_fcpx_file(SAMPLE_VERSION_1_14_XML)
-    with pytest.raises(NotImplementedError):
-        write_fcpx(timeline, fcpxml_version="1.11")
+    with pytest.raises(ValueError):
+        write_fcpx(timeline, fcpxml_version="2.0")
+
+
+@pytest.mark.parametrize("version", SUPPORTED_VERSIONS)
+def test_simple_timeline_writes_and_validates_for_all_supported_versions(version):
+    timeline = make_video_timeline("Simple", make_external_clip("Clip_A"))
+
+    xml_string = write_fcpx(timeline, fcpxml_version=version)
+
+    assert_valid_for_version(xml_string, version)
+    roundtrip = read_fcpx_string(xml_string)
+    roundtrip_timeline = first_timeline(roundtrip)
+    assert roundtrip_timeline.name == "Simple"
+    assert first_non_gap(roundtrip_timeline.video_tracks()[0]).name == "Clip_A"
+
+
+@pytest.mark.parametrize(
+    "version, expected_root_tag, resources_path, asset_has_media_rep",
+    [
+        ("1.0", "project", "./project/resources", False),
+        ("1.4", "library", "./resources", False),
+        ("1.9", "project", "./resources", True),
+        ("1.14", "project", "./resources", True),
+    ],
+)
+def test_writer_uses_version_specific_root_and_asset_shapes(
+    version,
+    expected_root_tag,
+    resources_path,
+    asset_has_media_rep,
+):
+    timeline = make_video_timeline("ShapeTest", make_external_clip("Clip_A"))
+
+    xml_string = write_fcpx(timeline, fcpxml_version=version)
+    root = ET.fromstring(xml_string)
+
+    first_story = next(
+        child.tag
+        for child in root
+        if child.tag not in {"resources"}
+    )
+    assert first_story == expected_root_tag
+    assert root.find(resources_path) is not None
+
+    asset = root.find(".//asset")
+    assert asset is not None
+    if asset_has_media_rep:
+        assert "src" not in asset.attrib
+        assert asset.findall("./media-rep")
+    else:
+        assert asset.get("src")
+        assert not asset.findall("./media-rep")
+
+
+def test_reads_legacy_v1_0_project_resources_generic_filter_and_transition_ref():
+    xml_string = textwrap.dedent(
+        """\
+        <?xml version="1.0" encoding="UTF-8"?>
+        <!DOCTYPE fcpxml>
+        <fcpxml version="1.0">
+            <project name="Legacy Project">
+                <resources>
+                    <format id="r1" name="FFVideoFormat720p24" frameDuration="1/24s"/>
+                    <asset id="r2" name="Legacy_A" src="file:///tmp/legacy_a.mov" start="0s" duration="4s" hasVideo="1" hasAudio="0"/>
+                    <asset id="r3" name="Legacy_B" src="file:///tmp/legacy_b.mov" start="0s" duration="4s" hasVideo="1" hasAudio="0"/>
+                    <effect id="r4" name="Gaussian Blur"/>
+                    <effect id="r5" name="Cross Dissolve"/>
+                </resources>
+                <sequence format="r1" duration="4s" tcStart="0s" tcFormat="NDF">
+                    <spine>
+                        <clip name="Legacy_A" offset="0s" start="0s" duration="2s">
+                            <video ref="r2" offset="0s" duration="2s"/>
+                            <filter ref="r4">
+                                <param name="Amount" key="1" value="0.5"/>
+                            </filter>
+                        </clip>
+                        <transition ref="r5" offset="2s" duration="1s"/>
+                        <clip name="Legacy_B" offset="3s" start="0s" duration="1s">
+                            <video ref="r3" offset="0s" duration="1s"/>
+                        </clip>
+                    </spine>
+                </sequence>
+            </project>
+        </fcpxml>
+        """
+    )
+
+    timeline = read_fcpx_string(xml_string)
+    track = timeline.video_tracks()[0]
+    first_clip = first_non_gap(track)
+    transition = next(item for item in track if isinstance(item, otio.schema.Transition))
+
+    assert timeline.name == "Legacy Project"
+    assert first_clip.media_reference.target_url.endswith("legacy_a.mov")
+    assert first_clip.effects[0].metadata[META_NAMESPACE]["element"] == "filter"
+    assert transition.transition_type == otio.schema.TransitionTypes.SMPTE_Dissolve
+
+
+def test_mc_clip_read_write_roundtrip_for_v1_8():
+    xml_string = textwrap.dedent(
+        """\
+        <?xml version="1.0" encoding="UTF-8"?>
+        <!DOCTYPE fcpxml>
+        <fcpxml version="1.8">
+            <resources>
+                <format id="r1" name="FFVideoFormat720p24" frameDuration="1/24s"/>
+                <asset id="r2" name="CamA" src="file:///tmp/cam_a.mov" start="0s" duration="10s" hasVideo="1" hasAudio="0" format="r1"/>
+                <media id="r3" name="MultiClip">
+                    <multicam format="r1" tcStart="0s" tcFormat="NDF">
+                        <mc-angle name="A" angleID="angle-a">
+                            <asset-clip name="CamA" ref="r2" offset="0s" start="0s" duration="10s" format="r1"/>
+                        </mc-angle>
+                    </multicam>
+                </media>
+            </resources>
+            <project name="MC Project">
+                <sequence format="r1" duration="4s" tcStart="0s" tcFormat="NDF">
+                    <spine>
+                        <mc-clip name="MultiClip" ref="r3" offset="0s" start="0s" duration="4s">
+                            <mc-source angleID="angle-a" srcEnable="all"/>
+                        </mc-clip>
+                    </spine>
+                </sequence>
+            </project>
+        </fcpxml>
+        """
+    )
+
+    timeline = read_fcpx_string(xml_string)
+    clip = first_non_gap(timeline.video_tracks()[0])
+
+    assert isinstance(clip, otio.schema.Clip)
+    assert clip.name == "MultiClip"
+    assert clip.metadata[META_NAMESPACE]["mc_clip"]["attrs"]["ref"]
+
+    roundtrip_xml = write_fcpx(timeline, fcpxml_version="1.8")
+    assert_valid_for_version(roundtrip_xml, "1.8")
+    assert "<mc-clip" in roundtrip_xml
+
+
+def test_audition_read_write_roundtrip_for_v1_11():
+    xml_string = textwrap.dedent(
+        """\
+        <?xml version="1.0" encoding="UTF-8"?>
+        <!DOCTYPE fcpxml>
+        <fcpxml version="1.11">
+            <resources>
+                <format id="r1" name="FFVideoFormat720p24" frameDuration="1/24s"/>
+                <asset id="r2" name="Alt A" format="r1" start="0s" duration="2s" hasVideo="1" hasAudio="0">
+                    <media-rep kind="original-media" src="file:///tmp/alt_a.mov"/>
+                </asset>
+                <asset id="r3" name="Alt B" format="r1" start="0s" duration="2s" hasVideo="1" hasAudio="0">
+                    <media-rep kind="original-media" src="file:///tmp/alt_b.mov"/>
+                </asset>
+            </resources>
+            <project name="Audition Project">
+                <sequence format="r1" duration="2s" tcStart="0s" tcFormat="NDF">
+                    <spine>
+                        <audition offset="0s">
+                            <asset-clip name="Alt A" ref="r2" start="0s" duration="2s" format="r1"/>
+                            <asset-clip name="Alt B" ref="r3" start="0s" duration="2s" format="r1"/>
+                        </audition>
+                    </spine>
+                </sequence>
+            </project>
+        </fcpxml>
+        """
+    )
+
+    timeline = read_fcpx_string(xml_string)
+    clip = first_non_gap(timeline.video_tracks()[0])
+
+    assert isinstance(clip, otio.schema.Clip)
+    assert clip.name == "Alt A"
+    assert clip.metadata[META_NAMESPACE]["audition"]["attrs"]["offset"] == "0s"
+
+    roundtrip_xml = write_fcpx(timeline, fcpxml_version="1.11")
+    assert_valid_for_version(roundtrip_xml, "1.11")
+    assert "<audition" in roundtrip_xml
 
 
 def test_multi_event_library_structure_roundtrip_and_validate():
@@ -607,7 +797,7 @@ def test_format_without_frame_duration_falls_back_to_format_name_rate():
 
 
 @pytest.mark.parametrize("tag_name", ["mc-clip", "audition"])
-def test_top_level_unsupported_story_items_raise(tag_name):
+def test_top_level_legacy_story_items_are_readable(tag_name):
     xml_string = textwrap.dedent(
         """\
         <?xml version="1.0" encoding="UTF-8"?>
@@ -621,8 +811,8 @@ def test_top_level_unsupported_story_items_raise(tag_name):
         """.format(tag=tag_name)
     )
 
-    with pytest.raises(NotImplementedError):
-        read_fcpx_string(xml_string)
+    collection = read_fcpx_string(xml_string)
+    assert len(collection) == 1
 
 
 @pytest.mark.parametrize(

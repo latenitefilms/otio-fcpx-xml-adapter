@@ -17,11 +17,23 @@ from xml.etree import cElementTree
 import opentimelineio as otio
 
 META_NAMESPACE = "fcpx"
+SUPPORTED_VERSIONS = tuple(f"1.{minor}" for minor in range(15))
 SUPPORTED_WRITE_VERSION = "1.14"
 DEFAULT_FRAME_RATE = 24.0
+PROJECT_RESOURCES_VERSION_MAX = "1.3"
+GENERIC_FILTER_VERSION_MAX = "1.2"
+LEGACY_TRANSITION_VERSION_MAX = "1.2"
+LIBRARY_ROOT_ONLY_VERSIONS = {"1.4", "1.5"}
+ASSET_FORMAT_VERSION_MIN = "1.3"
+REF_CLIP_VERSION_MIN = "1.2"
+ASSET_CLIP_VERSION_MIN = "1.6"
+SYNC_CLIP_VERSION_MIN = "1.6"
+MEDIA_REP_VERSION_MIN = "1.9"
 
 STORY_ITEM_TAGS = {
     "clip",
+    "mc-clip",
+    "audition",
     "asset-clip",
     "ref-clip",
     "sync-clip",
@@ -33,7 +45,7 @@ STORY_ITEM_TAGS = {
     "live-drawing",
 }
 TIMELINE_ITEM_TAGS = STORY_ITEM_TAGS - {"transition"}
-UNSUPPORTED_ACTIVE_STORY_TAGS = {"mc-clip", "audition"}
+UNSUPPORTED_ACTIVE_STORY_TAGS = set()
 MARKER_TAGS = {
     "marker",
     "keyword",
@@ -62,6 +74,27 @@ FRAMERATE_FRAMEDURATION = {
     119.88: "1001/120000s",
     120.0: "1/120s",
 }
+
+
+def _version_key(version):
+    return tuple(int(part) for part in version.split("."))
+
+
+def _validate_version(version):
+    if version not in SUPPORTED_VERSIONS:
+        raise ValueError(
+            f"Unsupported FCPXML version '{version}'. Supported versions: "
+            f"{', '.join(SUPPORTED_VERSIONS)}."
+        )
+    return version
+
+
+def _version_at_least(version, minimum_version):
+    return _version_key(version) >= _version_key(minimum_version)
+
+
+def _version_at_most(version, maximum_version):
+    return _version_key(version) <= _version_key(maximum_version)
 
 
 def format_name(frame_rate, path):
@@ -251,8 +284,16 @@ class FcpxXml:
 
     def __init__(self, xml_string):
         self.fcpx_xml = cElementTree.fromstring(xml_string)
+        self.version = _validate_version(
+            self.fcpx_xml.get("version", SUPPORTED_WRITE_VERSION)
+        )
         self.child_parent_map = {child: parent for parent in self.fcpx_xml.iter() for child in parent}
-        self.resources = _ResourceIndex(self.fcpx_xml.find("./resources"))
+        resources_element = self.fcpx_xml.find("./resources")
+        if resources_element is None:
+            project_element = self.fcpx_xml.find("./project")
+            if project_element is not None:
+                resources_element = project_element.find("./resources")
+        self.resources = _ResourceIndex(resources_element)
 
     def to_otio(self):
         if self.fcpx_xml.find("./library") is not None:
@@ -299,10 +340,6 @@ class FcpxXml:
             if child.tag == "project":
                 container.append(self._from_project(child))
                 continue
-            if child.tag in UNSUPPORTED_ACTIVE_STORY_TAGS:
-                raise NotImplementedError(
-                    f"Top-level '{child.tag}' elements are not supported yet."
-                )
             if child.tag in STORY_ITEM_TAGS:
                 container.append(self._parse_collection_item(child, None))
                 continue
@@ -332,10 +369,6 @@ class FcpxXml:
             if child.tag in STORY_ITEM_TAGS:
                 collection.append(self._parse_collection_item(child, None))
                 continue
-            if child.tag in UNSUPPORTED_ACTIVE_STORY_TAGS:
-                raise NotImplementedError(
-                    f"Top-level '{child.tag}' elements are not supported yet."
-                )
         return collection
 
     def _sequence_to_stack(self, sequence_element, name="", source_range=None):
@@ -432,6 +465,12 @@ class FcpxXml:
         if element.tag == "title":
             return self._build_title(element, default_format_id)
 
+        if element.tag == "audition":
+            return self._build_audition(element, default_format_id)
+
+        if element.tag == "mc-clip":
+            return self._build_mc_clip(element, default_format_id)
+
         if element.tag == "ref-clip":
             return self._build_ref_clip(element, default_format_id)
 
@@ -447,6 +486,76 @@ class FcpxXml:
             media_reference=self._media_reference_for_element(element, default_format_id),
             source_range=source_range,
         )
+        self._apply_common_metadata(clip, element, default_format_id)
+        return clip
+
+    def _build_audition(self, element, default_format_id):
+        alternatives = [
+            child
+            for child in list(element)
+            if child.tag in STORY_ITEM_TAGS and child.tag != "transition"
+        ]
+        if not alternatives:
+            clip = otio.schema.Clip(
+                name=element.get("name", ""),
+                media_reference=otio.schema.MissingReference(),
+                source_range=self._time_range(
+                    element,
+                    self._format_rate_for_element(element, default_format_id),
+                ),
+            )
+            clip.metadata.setdefault(META_NAMESPACE, {})["audition"] = {
+                "attrs": dict(element.attrib),
+                "alternatives_xml": [],
+            }
+            self._apply_common_metadata(clip, element, default_format_id)
+            return clip
+
+        active_element = alternatives[0]
+        active_item = self._build_story_item(active_element, default_format_id)
+        active_item.metadata.setdefault(META_NAMESPACE, {})["audition"] = {
+            "attrs": dict(element.attrib),
+            "alternatives_xml": [_raw_xml(child) for child in alternatives[1:]],
+            "resource_xml": self._resource_xml_for_elements(alternatives[1:]),
+        }
+        return active_item
+
+    def _build_mc_clip(self, element, default_format_id):
+        clip = otio.schema.Clip(
+            name=element.get("name", ""),
+            media_reference=otio.schema.MissingReference(),
+            source_range=self._time_range(
+                element,
+                self._format_rate_for_element(element, default_format_id),
+            ),
+        )
+        fcpx_meta = clip.metadata.setdefault(META_NAMESPACE, {})
+        fcpx_meta["mc_clip"] = {
+            "attrs": dict(element.attrib),
+            "mc_source_xml": [
+                _raw_xml(child) for child in element if child.tag == "mc-source"
+            ],
+            "anchor_xml": [
+                _raw_xml(child)
+                for child in element
+                if child.tag in {"spine", "clip", "asset-clip", "ref-clip", "sync-clip", "title", "video", "audio", "gap"}
+            ],
+        }
+        fcpx_meta["mc_source_xml"] = list(fcpx_meta["mc_clip"]["mc_source_xml"])
+        fcpx_meta["anchor_xml"] = list(fcpx_meta["mc_clip"]["anchor_xml"])
+        fcpx_meta["mc_clip"]["resource_xml"] = self._resource_xml_for_elements([element])
+        fcpx_meta["resource_xml"] = list(fcpx_meta["mc_clip"]["resource_xml"])
+
+        media_element = self.resources.media.get(element.get("ref", ""))
+        if media_element is not None:
+            fcpx_meta["media"] = {"attrs": dict(media_element.attrib)}
+            sequence_element = media_element.find("./sequence")
+            multicam_element = media_element.find("./multicam")
+            if sequence_element is not None:
+                fcpx_meta["media_sequence_xml"] = _raw_xml(sequence_element)
+            if multicam_element is not None:
+                fcpx_meta["multicam_xml"] = _raw_xml(multicam_element)
+
         self._apply_common_metadata(clip, element, default_format_id)
         return clip
 
@@ -555,6 +664,10 @@ class FcpxXml:
         filter_video = element.find("./filter-video")
         if filter_video is not None and "Dissolve" in filter_video.get("name", ""):
             transition_type = otio.schema.TransitionTypes.SMPTE_Dissolve
+        elif element.get("ref"):
+            resource = self.resources.effects.get(element.get("ref", ""))
+            if resource is not None and "Dissolve" in resource.get("name", ""):
+                transition_type = otio.schema.TransitionTypes.SMPTE_Dissolve
         transition = otio.schema.Transition(
             name=element.get("name", ""),
             transition_type=transition_type,
@@ -619,6 +732,14 @@ class FcpxXml:
         if raw_audio_role_source:
             fcpx_meta["audio_role_source_xml"] = raw_audio_role_source
 
+        legacy_audio_source = [
+            _raw_xml(child)
+            for child in element
+            if child.tag in {"audio-source", "audio-aux-source"}
+        ]
+        if legacy_audio_source:
+            fcpx_meta["legacy_audio_source_xml"] = legacy_audio_source
+
         raw_sync_source = [
             _raw_xml(child)
             for child in element
@@ -664,7 +785,7 @@ class FcpxXml:
                 extra_meta["time_map"] = time_map_payload
 
         for child in list(element):
-            if child.tag.startswith(FILTER_TAG_PREFIXES):
+            if child.tag == "filter" or child.tag.startswith(FILTER_TAG_PREFIXES):
                 if child.tag in {"conform-rate", "timeMap"}:
                     continue
                 effect = self._effect_from_xml(child)
@@ -703,6 +824,26 @@ class FcpxXml:
         )
 
     def _effect_from_xml(self, element):
+        if element.tag == "filter":
+            resource = self.resources.effects.get(element.get("ref", ""))
+            effect_name = (
+                resource.get("name")
+                if resource is not None and resource.get("name")
+                else element.get("name", "")
+            )
+            return otio.schema.Effect(
+                name=element.get("name", effect_name),
+                effect_name=effect_name or element.tag,
+                metadata={
+                    META_NAMESPACE: {
+                        "element": element.tag,
+                        "attrs": dict(element.attrib),
+                        "params": [dict(param.attrib) for param in element.findall("./param")],
+                        "resource": {} if resource is None else dict(resource.attrib),
+                    }
+                },
+            )
+
         if element.tag == "filter-video":
             resource = self.resources.effects.get(element.get("ref", ""))
             effect_name = (
@@ -763,6 +904,9 @@ class FcpxXml:
 
     def _extract_fcpx_payload(self, element):
         payload = {}
+        if element.get("ref"):
+            resource = self.resources.effects.get(element.get("ref", ""))
+            payload["resource"] = {} if resource is None else dict(resource.attrib)
         filter_video = element.find("./filter-video")
         if filter_video is not None:
             resource = self.resources.effects.get(filter_video.get("ref", ""))
@@ -849,6 +993,9 @@ class FcpxXml:
                         "attrs": dict(asset.attrib),
                         "format": self.resources.format_attrs(format_id),
                         "media_reps": [dict(media_rep.attrib) for media_rep in asset.findall("./media-rep")],
+                        "bookmark_xml": [
+                            _raw_xml(bookmark) for bookmark in asset.findall("./bookmark")
+                        ],
                         "metadata": self._metadata_entries(asset.find("./metadata")),
                     }
                 }
@@ -887,11 +1034,58 @@ class FcpxXml:
             payload["ratings"] = ratings
         return payload
 
+    def _resource_xml_for_elements(self, elements):
+        resource_xml = []
+        seen_ids = set()
+
+        def append_resource(resource_element):
+            if resource_element is None:
+                return
+            resource_id = resource_element.get("id")
+            if not resource_id or resource_id in seen_ids:
+                return
+            seen_ids.add(resource_id)
+            resource_xml.append(_raw_xml(resource_element))
+
+        def collect_resource_refs(element):
+            if element.get("format"):
+                append_resource(self.resources.formats.get(element.get("format")))
+
+            if element.tag in {"asset-clip", "video", "audio"} and element.get("ref"):
+                asset = self.resources.assets.get(element.get("ref"))
+                append_resource(asset)
+                if asset is not None and asset.get("format"):
+                    append_resource(self.resources.formats.get(asset.get("format")))
+            elif element.tag == "clip":
+                asset_id = self._reference_id_for_story(element)
+                asset = self.resources.assets.get(asset_id or "")
+                append_resource(asset)
+                if asset is not None and asset.get("format"):
+                    append_resource(self.resources.formats.get(asset.get("format")))
+            elif element.tag in {"ref-clip", "mc-clip"} and element.get("ref"):
+                media = self.resources.media.get(element.get("ref"))
+                append_resource(media)
+                if media is not None:
+                    sequence = media.find("./sequence")
+                    multicam = media.find("./multicam")
+                    if sequence is not None and sequence.get("format"):
+                        append_resource(self.resources.formats.get(sequence.get("format")))
+                    if multicam is not None and multicam.get("format"):
+                        append_resource(self.resources.formats.get(multicam.get("format")))
+                    for child in media:
+                        collect_resource_refs(child)
+
+            if element.tag in {"filter", "filter-video", "filter-audio", "transition", "title"} and element.get("ref"):
+                append_resource(self.resources.effects.get(element.get("ref")))
+
+            for child in list(element):
+                collect_resource_refs(child)
+
+        for element in elements:
+            collect_resource_refs(element)
+        return resource_xml
+
     def _parse_collection_item(self, element, default_format_id):
-        if element.tag in UNSUPPORTED_ACTIVE_STORY_TAGS:
-            raise NotImplementedError(
-                f"Top-level '{element.tag}' elements are not supported yet."
-            )
         if element.tag == "transition":
             return self._build_transition(element, default_format_id)
         return self._build_story_item(element, default_format_id)
@@ -965,6 +1159,15 @@ class FcpxXml:
             return default_format_id
         if element.tag == "sequence":
             return element.get("format", default_format_id)
+        if element.tag == "mc-clip":
+            media = self.resources.media.get(element.get("ref", ""))
+            if media is not None:
+                multicam = media.find("./multicam")
+                if multicam is not None:
+                    return multicam.get("format", default_format_id)
+                sequence = media.find("./sequence")
+                if sequence is not None:
+                    return sequence.get("format", default_format_id)
         if element.tag in {"video", "audio", "asset-clip"} and element.get("ref"):
             asset = self.resources.assets.get(element.get("ref"))
             if asset is not None:
@@ -1001,6 +1204,28 @@ class FcpxXml:
         if element.tag == "audio":
             return True
         if element.tag == "video":
+            return False
+        if element.tag == "audition":
+            lane = element.get("lane")
+            if lane is not None:
+                try:
+                    return int(lane) < 0
+                except ValueError:
+                    return False
+            active = next(
+                (child for child in list(element) if child.tag in TIMELINE_ITEM_TAGS),
+                None,
+            )
+            return active is not None and FcpxXml._audio_only(active)
+        if element.tag == "mc-clip":
+            if element.get("srcEnable") == "audio":
+                return True
+            lane = element.get("lane")
+            if lane is not None:
+                try:
+                    return int(lane) < 0
+                except ValueError:
+                    return False
             return False
         if element.tag == "asset-clip":
             lane = element.get("lane")
@@ -1044,17 +1269,15 @@ class FcpxXml:
 
 
 class FcpxOtio:
-    """Convert OTIO into FCPXML v1.14."""
+    """Convert OTIO into FCPXML."""
 
     def __init__(self, input_otio, fcpxml_version=SUPPORTED_WRITE_VERSION):
-        if fcpxml_version != SUPPORTED_WRITE_VERSION:
-            raise NotImplementedError(
-                "This adapter currently only writes FCPXML v1.14."
-            )
+        self.fcpxml_version = _validate_version(fcpxml_version)
         self.input_otio = input_otio
-        self.fcpx_xml = cElementTree.Element("fcpxml", version=SUPPORTED_WRITE_VERSION)
-        self.resource_element = cElementTree.SubElement(self.fcpx_xml, "resources")
+        self.fcpx_xml = cElementTree.Element("fcpxml", version=self.fcpxml_version)
+        self.resource_element = None
         self.resource_count = 0
+        self.used_resource_ids = set()
         self.format_ids = {}
         self.asset_ids = {}
         self.effect_ids = {}
@@ -1062,9 +1285,17 @@ class FcpxOtio:
 
     def to_xml(self):
         if isinstance(self.input_otio, otio.schema.Timeline):
-            self.fcpx_xml.append(self._project_element(self.input_otio))
+            if self.fcpxml_version in LIBRARY_ROOT_ONLY_VERSIONS:
+                self._append_collection(self._wrap_timeline_in_library(self.input_otio), self.fcpx_xml)
+            else:
+                self.fcpx_xml.append(self._project_element(self.input_otio))
         elif isinstance(self.input_otio, otio.schema.SerializableCollection):
-            self._append_collection(self.input_otio, self.fcpx_xml)
+            if _version_at_most(self.fcpxml_version, PROJECT_RESOURCES_VERSION_MAX):
+                self.fcpx_xml.append(self._legacy_project_for_collection(self.input_otio))
+            elif self.fcpxml_version in LIBRARY_ROOT_ONLY_VERSIONS:
+                self._append_collection(self._wrap_collection_in_library(self.input_otio), self.fcpx_xml)
+            else:
+                self._append_collection(self.input_otio, self.fcpx_xml)
         else:
             raise TypeError("Unsupported OTIO root type for fcpx_xml adapter.")
 
@@ -1076,7 +1307,69 @@ class FcpxOtio:
             '<?xml version="1.0" encoding="UTF-8"?>\n<!DOCTYPE fcpxml>\n',
         )
 
+    def _ensure_resource_element(self, project_element=None):
+        if self.resource_element is not None:
+            return self.resource_element
+        if _version_at_most(self.fcpxml_version, PROJECT_RESOURCES_VERSION_MAX):
+            if project_element is None:
+                raise RuntimeError("Project-scoped resources require a project element.")
+            self.resource_element = cElementTree.SubElement(project_element, "resources")
+        else:
+            self.resource_element = cElementTree.SubElement(self.fcpx_xml, "resources")
+        return self.resource_element
+
+    def _wrap_timeline_in_library(self, timeline):
+        collection = otio.schema.SerializableCollection(name=timeline.name)
+        collection.metadata[META_NAMESPACE] = {"library": {"attrs": {}}}
+        event_collection = otio.schema.SerializableCollection(name=timeline.name or "Event")
+        event_collection.metadata[META_NAMESPACE] = {
+            "event": {"attrs": {"name": timeline.name or "Event"}}
+        }
+        event_collection.append(timeline)
+        collection.append(event_collection)
+        return collection
+
+    def _wrap_collection_in_library(self, collection):
+        fcpx_meta = collection.metadata.get(META_NAMESPACE, {})
+        if "library" in fcpx_meta or self._looks_like_library(collection):
+            return collection
+        library = otio.schema.SerializableCollection(name=collection.name)
+        library.metadata[META_NAMESPACE] = {"library": {"attrs": {}}}
+        if "event" in fcpx_meta:
+            library.append(collection)
+            return library
+        event = otio.schema.SerializableCollection(name=collection.name or "Event")
+        event.metadata[META_NAMESPACE] = {
+            "event": {"attrs": {"name": collection.name or "Event"}}
+        }
+        for child in collection:
+            event.append(child)
+        library.append(event)
+        return library
+
+    def _legacy_project_for_collection(self, collection):
+        timelines = [child for child in collection if isinstance(child, otio.schema.Timeline)]
+        if timelines:
+            if len(collection) != 1:
+                raise NotImplementedError(
+                    "FCPXML versions 1.0-1.3 can only write a single top-level timeline."
+                )
+            return self._project_element(timelines[0])
+        project_attrs = {
+            "name": collection.name,
+        }
+        project_element = cElementTree.Element(
+            "project",
+            {k: v for k, v in project_attrs.items() if v},
+        )
+        self._ensure_resource_element(project_element)
+        for child in collection:
+            project_element.append(self._element_for_collection_item(child, top_level=True))
+        return project_element
+
     def _append_collection(self, collection, parent_element):
+        if not _version_at_most(self.fcpxml_version, PROJECT_RESOURCES_VERSION_MAX):
+            self._ensure_resource_element()
         fcpx_meta = collection.metadata.get(META_NAMESPACE, {})
         if "library" in fcpx_meta or self._looks_like_library(collection):
             library_attrs = dict(fcpx_meta.get("library", {}).get("attrs", {}))
@@ -1132,6 +1425,7 @@ class FcpxOtio:
         project_attrs = dict(timeline.metadata.get(META_NAMESPACE, {}).get("project", {}).get("attrs", {}))
         project_attrs.setdefault("name", timeline.name)
         project_element = cElementTree.Element("project", {k: v for k, v in project_attrs.items() if v != ""})
+        self._ensure_resource_element(project_element if _version_at_most(self.fcpxml_version, PROJECT_RESOURCES_VERSION_MAX) else None)
         project_element.append(self._stack_to_sequence(timeline.tracks, timeline))
         return project_element
 
@@ -1248,6 +1542,8 @@ class FcpxOtio:
         return self._element_for_track_item(item, None, top_level=top_level)
 
     def _element_for_track_item(self, item, default_format_id, top_level=False):
+        if item.metadata.get(META_NAMESPACE, {}).get("audition"):
+            return self._element_for_audition(item, default_format_id, top_level=top_level)
         if isinstance(item, otio.schema.Transition):
             return self._element_for_transition(item)
         if isinstance(item, otio.schema.Gap):
@@ -1262,6 +1558,18 @@ class FcpxOtio:
         attrs = dict(transition.metadata.get(META_NAMESPACE, {}).get("transition", {}).get("attrs", {}))
         attrs.setdefault("name", transition.name)
         attrs["duration"] = from_rational_time(transition.in_offset + transition.out_offset)
+        if _version_at_most(self.fcpxml_version, LEGACY_TRANSITION_VERSION_MAX):
+            payload = transition.metadata.get(META_NAMESPACE, {}).get("transition", {})
+            resource = (
+                payload.get("resource")
+                or payload.get("filter_video", {}).get("resource")
+                or {"name": transition.name or "Cross Dissolve"}
+            )
+            attrs["ref"] = self._ensure_effect_resource(
+                resource.get("name", transition.name or "Cross Dissolve"),
+                resource,
+            )
+            return cElementTree.Element("transition", attrs)
         element = cElementTree.Element("transition", attrs)
 
         payload = transition.metadata.get(META_NAMESPACE, {}).get("transition", {})
@@ -1303,6 +1611,10 @@ class FcpxOtio:
         container_type = stack.metadata.get(META_NAMESPACE, {}).get("container", "ref-clip")
         if container_type == "sync-clip":
             return self._element_for_sync_clip(stack)
+        if _version_at_most(self.fcpxml_version, "1.1"):
+            raise NotImplementedError(
+                "FCPXML versions 1.0-1.1 do not support ref-clip containers."
+            )
         if container_type in UNSUPPORTED_ACTIVE_STORY_TAGS:
             raise NotImplementedError(
                 f"Writing '{container_type}' containers is not supported yet."
@@ -1323,6 +1635,10 @@ class FcpxOtio:
         return element
 
     def _element_for_sync_clip(self, stack):
+        if not _version_at_least(self.fcpxml_version, SYNC_CLIP_VERSION_MIN):
+            raise NotImplementedError(
+                f"FCPXML v{self.fcpxml_version} does not support sync-clip items."
+            )
         attrs = dict(stack.metadata.get(META_NAMESPACE, {}).get("sync_clip", {}).get("attrs", {}))
         attrs.setdefault("name", stack.name)
         attrs["duration"] = from_rational_time(stack.duration())
@@ -1338,11 +1654,16 @@ class FcpxOtio:
         return element
 
     def _element_for_clip(self, clip, top_level=False):
+        if clip.metadata.get(META_NAMESPACE, {}).get("mc_clip"):
+            return self._element_for_mc_clip(clip)
         if isinstance(clip.media_reference, otio.schema.GeneratorReference) and clip.media_reference.generator_kind == "fcpx.title":
             return self._element_for_title(clip)
 
         story_tag = clip.metadata.get(META_NAMESPACE, {}).get("story", {}).get("tag", "clip")
-        if top_level and story_tag == "asset-clip":
+        if top_level and story_tag == "asset-clip" and _version_at_least(
+            self.fcpxml_version,
+            ASSET_CLIP_VERSION_MIN,
+        ):
             return self._element_for_asset_clip(clip)
 
         element = cElementTree.Element(
@@ -1385,13 +1706,67 @@ class FcpxOtio:
         self._append_common_children(element, clip)
         return element
 
+    def _element_for_mc_clip(self, clip):
+        if not _version_at_least(self.fcpxml_version, "1.1"):
+            raise NotImplementedError(
+                "FCPXML v1.0 does not support mc-clip items."
+            )
+        self._append_preserved_resource_xml(
+            clip.metadata.get(META_NAMESPACE, {}).get("resource_xml")
+        )
+        media_id = self._ensure_raw_media_resource(clip)
+        attrs = dict(clip.metadata.get(META_NAMESPACE, {}).get("mc_clip", {}).get("attrs", {}))
+        attrs.setdefault("name", clip.name)
+        attrs["ref"] = media_id
+        attrs["duration"] = from_rational_time(clip.duration())
+        attrs.setdefault(
+            "offset",
+            from_rational_time(
+                clip.trimmed_range_in_parent().start_time
+                if clip.parent()
+                else otio.opentime.RationalTime(0, clip.duration().rate or DEFAULT_FRAME_RATE)
+            ),
+        )
+        if clip.source_range is not None:
+            attrs["start"] = from_rational_time(clip.source_range.start_time)
+        element = cElementTree.Element("mc-clip", {k: v for k, v in attrs.items() if v != ""})
+        self._append_common_children(
+            element,
+            clip,
+            anchor_xml_keys=("mc_source_xml", "anchor_xml"),
+        )
+        return element
+
+    def _element_for_audition(self, item, default_format_id, top_level=False):
+        attrs = dict(item.metadata.get(META_NAMESPACE, {}).get("audition", {}).get("attrs", {}))
+        self._append_preserved_resource_xml(
+            item.metadata.get(META_NAMESPACE, {}).get("audition", {}).get("resource_xml")
+        )
+        element = cElementTree.Element("audition", {k: v for k, v in attrs.items() if v != ""})
+        active_item = copy.deepcopy(item)
+        active_item.metadata.setdefault(META_NAMESPACE, {}).pop("audition", None)
+        active_element = self._element_for_track_item(
+            active_item,
+            default_format_id,
+            top_level=top_level,
+        )
+        active_element.attrib.pop("offset", None)
+        active_element.attrib.pop("lane", None)
+        element.append(active_element)
+        _append_raw_xml(
+            element,
+            item.metadata.get(META_NAMESPACE, {}).get("audition", {}).get("alternatives_xml"),
+        )
+        return element
+
     def _element_for_asset_clip(self, clip):
         ref_id = self._ensure_asset_resource(clip)
         attrs = dict(clip.media_reference.metadata.get(META_NAMESPACE, {}).get("asset_clip", {}).get("attrs", {}))
         attrs.setdefault("name", clip.name)
         attrs["ref"] = ref_id
         attrs["duration"] = from_rational_time(clip.duration())
-        attrs.setdefault("format", self._ensure_format_for_clip(clip))
+        if _version_at_least(self.fcpxml_version, ASSET_CLIP_VERSION_MIN):
+            attrs.setdefault("format", self._ensure_format_for_clip(clip))
         element = cElementTree.Element("asset-clip", {k: v for k, v in attrs.items() if v != ""})
         self._append_common_children(element, clip)
         return element
@@ -1420,13 +1795,21 @@ class FcpxOtio:
         if clip.source_range is not None and clip.source_range.start_time.value != 0:
             attrs["start"] = from_rational_time(clip.source_range.start_time)
         element = cElementTree.Element("title", {k: v for k, v in attrs.items() if v != ""})
-        _append_raw_xml(element, parameters.get("param_xml"))
+        if _version_at_least(self.fcpxml_version, "1.3"):
+            _append_raw_xml(element, parameters.get("param_xml"))
         _append_raw_xml(element, parameters.get("text_xml"))
-        _append_raw_xml(element, parameters.get("text_style_def_xml"))
+        if _version_at_least(self.fcpxml_version, "1.3"):
+            _append_raw_xml(element, parameters.get("text_style_def_xml"))
         self._append_common_children(element, clip)
         return element
 
-    def _append_common_children(self, element, item, include_markers=True):
+    def _append_common_children(
+        self,
+        element,
+        item,
+        include_markers=True,
+        anchor_xml_keys=(),
+    ):
         fcpx_meta = item.metadata.get(META_NAMESPACE, {})
         leading_children = []
         trailing_filter_children = []
@@ -1453,6 +1836,9 @@ class FcpxOtio:
         for child in reversed(leading_children):
             element.insert(0, child)
 
+        for key in anchor_xml_keys:
+            _append_raw_xml(element, fcpx_meta.get(key))
+
         if include_markers:
             for marker in getattr(item, "markers", []):
                 element.append(self._marker_element(marker))
@@ -1464,6 +1850,7 @@ class FcpxOtio:
                 for rating in fcpx_meta["ratings"]:
                     cElementTree.SubElement(element, "rating", dict(rating))
 
+        _append_raw_xml(element, fcpx_meta.get("legacy_audio_source_xml"))
         _append_raw_xml(element, fcpx_meta.get("audio_channel_source_xml"))
         _append_raw_xml(element, fcpx_meta.get("audio_role_source_xml"))
         _append_raw_xml(element, fcpx_meta.get("sync_source_xml"))
@@ -1474,6 +1861,23 @@ class FcpxOtio:
         metadata_entries = fcpx_meta.get("metadata")
         if metadata_entries:
             element.append(self._metadata_element(metadata_entries))
+
+    def _append_preserved_resource_xml(self, raw_resource_xml):
+        resources_element = self._ensure_resource_element()
+        for raw_xml in raw_resource_xml or []:
+            resource_element = cElementTree.fromstring(raw_xml)
+            resource_id = resource_element.get("id")
+            if resource_id and resources_element.find(f"./*[@id='{resource_id}']") is not None:
+                self.used_resource_ids.add(resource_id)
+                continue
+            resources_element.append(resource_element)
+            if resource_id:
+                self.used_resource_ids.add(resource_id)
+
+    def _resource_with_id(self, resource_id):
+        if not resource_id:
+            return None
+        return self._ensure_resource_element().find(f"./*[@id='{resource_id}']")
 
     def _effect_element(self, effect):
         if isinstance(effect, otio.schema.FreezeFrame):
@@ -1491,7 +1895,9 @@ class FcpxOtio:
 
         fcpx_meta = effect.metadata.get(META_NAMESPACE, {})
         tag = fcpx_meta.get("element")
-        if tag in {"filter-video", "filter-audio"}:
+        if tag in {"filter", "filter-video", "filter-audio"}:
+            if _version_at_most(self.fcpxml_version, GENERIC_FILTER_VERSION_MAX):
+                return "filter", self._legacy_filter_element(fcpx_meta)
             return "filter", self._effect_xml_from_payload(tag, fcpx_meta)
         if tag and tag.startswith("adjust-"):
             adjust_element = cElementTree.Element(
@@ -1503,6 +1909,19 @@ class FcpxOtio:
             _append_raw_xml(adjust_element, fcpx_meta.get("raw_children"))
             return "pre_story", adjust_element
         return None, None
+
+    def _legacy_filter_element(self, payload):
+        resource = payload.get("resource", {})
+        attrs = dict(payload.get("attrs", {}))
+        attrs["ref"] = self._ensure_effect_resource(
+            resource.get("name", attrs.get("name", "")),
+            resource,
+        )
+        element = cElementTree.Element("filter", {k: v for k, v in attrs.items() if k != "name" and v != ""})
+        if self.fcpxml_version == "1.0":
+            for param in payload.get("params", []):
+                cElementTree.SubElement(element, "param", dict(param))
+        return element
 
     def _time_map_element(self, payload):
         if not payload:
@@ -1544,15 +1963,54 @@ class FcpxOtio:
         if id(stack) in self.media_ids:
             return self.media_ids[id(stack)]
         media_attrs = dict(stack.metadata.get(META_NAMESPACE, {}).get("media", {}).get("attrs", {}))
-        media_id = self._resource_id_generator()
+        preserved_media_id = media_attrs.pop("id", "")
+        media_id = preserved_media_id or self._resource_id_generator()
+        existing_media = self._resource_with_id(media_id)
+        if existing_media is not None and existing_media.tag == "media":
+            self.media_ids[id(stack)] = media_id
+            self.used_resource_ids.add(media_id)
+            return media_id
+        if existing_media is not None:
+            media_id = self._resource_id_generator()
         media_attrs["id"] = media_id
         media_attrs.setdefault("name", stack.name)
-        media_element = cElementTree.SubElement(self.resource_element, "media", media_attrs)
+        self.used_resource_ids.add(media_id)
+        media_element = cElementTree.SubElement(self._ensure_resource_element(), "media", media_attrs)
         media_element.append(self._stack_to_sequence(stack))
         self.media_ids[id(stack)] = media_id
         return media_id
 
+    def _ensure_raw_media_resource(self, clip):
+        if id(clip) in self.media_ids:
+            return self.media_ids[id(clip)]
+        fcpx_meta = clip.metadata.get(META_NAMESPACE, {})
+        media_attrs = dict(fcpx_meta.get("media", {}).get("attrs", {}))
+        preserved_media_id = media_attrs.pop("id", "")
+        media_id = preserved_media_id or self._resource_id_generator()
+        existing_media = self._resource_with_id(media_id)
+        if existing_media is not None and existing_media.tag == "media":
+            self.media_ids[id(clip)] = media_id
+            self.used_resource_ids.add(media_id)
+            return media_id
+        if existing_media is not None:
+            media_id = self._resource_id_generator()
+        media_attrs["id"] = media_id
+        media_attrs.setdefault("name", clip.name)
+        self.used_resource_ids.add(media_id)
+        media_element = cElementTree.SubElement(self._ensure_resource_element(), "media", media_attrs)
+        if fcpx_meta.get("multicam_xml"):
+            media_element.append(cElementTree.fromstring(fcpx_meta["multicam_xml"]))
+        elif fcpx_meta.get("media_sequence_xml"):
+            media_element.append(cElementTree.fromstring(fcpx_meta["media_sequence_xml"]))
+        else:
+            raise NotImplementedError(
+                "mc-clip items require preserved media or multicam metadata to write."
+            )
+        self.media_ids[id(clip)] = media_id
+        return media_id
+
     def _ensure_effect_resource(self, name, resource_payload):
+        resource_payload = dict(resource_payload or {})
         key = (
             name,
             resource_payload.get("uid", ""),
@@ -1560,7 +2018,14 @@ class FcpxOtio:
         )
         if key in self.effect_ids:
             return self.effect_ids[key]
-        effect_id = self._resource_id_generator()
+        effect_id = resource_payload.pop("id", "") or self._resource_id_generator()
+        existing_effect = self._resource_with_id(effect_id)
+        if existing_effect is not None and existing_effect.tag == "effect":
+            self.effect_ids[key] = effect_id
+            self.used_resource_ids.add(effect_id)
+            return effect_id
+        if existing_effect is not None:
+            effect_id = self._resource_id_generator()
         effect_attrs = {
             "id": effect_id,
             "name": name,
@@ -1568,8 +2033,9 @@ class FcpxOtio:
         }
         if resource_payload.get("src"):
             effect_attrs["src"] = resource_payload["src"]
-        cElementTree.SubElement(self.resource_element, "effect", effect_attrs)
+        cElementTree.SubElement(self._ensure_resource_element(), "effect", effect_attrs)
         self.effect_ids[key] = effect_id
+        self.used_resource_ids.add(effect_id)
         return effect_id
 
     def _ensure_asset_resource(self, clip):
@@ -1594,11 +2060,22 @@ class FcpxOtio:
         format_id = self._ensure_format_for_clip(clip)
         available_range = self._available_range_for_clip(clip)
         asset_attrs = dict(asset_meta.get("attrs", {}))
+        preserved_asset_id = asset_attrs.pop("id", "")
         asset_attrs.pop("src", None)
-        asset_id = self._resource_id_generator()
+        asset_id = preserved_asset_id or self._resource_id_generator()
+        existing_asset = self._resource_with_id(asset_id)
+        if existing_asset is not None and existing_asset.tag == "asset":
+            self.asset_ids[key] = asset_id
+            self.used_resource_ids.add(asset_id)
+            return asset_id
+        if existing_asset is not None:
+            asset_id = self._resource_id_generator()
         asset_attrs["id"] = asset_id
         asset_attrs.setdefault("name", clip.name)
-        asset_attrs["format"] = format_id
+        if _version_at_least(self.fcpxml_version, ASSET_FORMAT_VERSION_MIN):
+            asset_attrs["format"] = format_id
+        else:
+            asset_attrs.pop("format", None)
         asset_attrs["start"] = from_rational_time(available_range.start_time)
         asset_attrs["duration"] = from_rational_time(available_range.duration)
         asset_attrs.setdefault("hasVideo", "0")
@@ -1610,26 +2087,32 @@ class FcpxOtio:
             asset_attrs["hasAudio"] = "1"
         else:
             asset_attrs["hasVideo"] = "1"
-        asset_element = cElementTree.SubElement(self.resource_element, "asset", asset_attrs)
+        asset_element = cElementTree.SubElement(self._ensure_resource_element(), "asset", asset_attrs)
 
-        media_reps = asset_meta.get("media_reps") or [
-            {
-                "kind": "original-media",
-                "src": target_url or f"file:///tmp/{clip.name}",
-            }
-        ]
-        for media_rep in media_reps:
-            rep_attrs = dict(media_rep)
-            rep_attrs.setdefault("kind", "original-media")
-            if not rep_attrs.get("src"):
-                rep_attrs["src"] = target_url or f"file:///tmp/{clip.name}"
-            cElementTree.SubElement(asset_element, "media-rep", rep_attrs)
+        if _version_at_least(self.fcpxml_version, MEDIA_REP_VERSION_MIN):
+            media_reps = asset_meta.get("media_reps") or [
+                {
+                    "kind": "original-media",
+                    "src": target_url or f"file:///tmp/{clip.name}",
+                }
+            ]
+            for media_rep in media_reps:
+                rep_attrs = dict(media_rep)
+                rep_attrs.setdefault("kind", "original-media")
+                if not rep_attrs.get("src"):
+                    rep_attrs["src"] = target_url or f"file:///tmp/{clip.name}"
+                cElementTree.SubElement(asset_element, "media-rep", rep_attrs)
+        else:
+            asset_element.set("src", target_url or f"file:///tmp/{clip.name}")
+            if _version_at_least(self.fcpxml_version, "1.2"):
+                _append_raw_xml(asset_element, asset_meta.get("bookmark_xml"))
 
         metadata_entries = asset_meta.get("metadata")
-        if metadata_entries:
+        if metadata_entries and _version_at_least(self.fcpxml_version, "1.2"):
             asset_element.append(self._metadata_element(metadata_entries))
 
         self.asset_ids[key] = asset_id
+        self.used_resource_ids.add(asset_id)
         return asset_id
 
     def _ensure_format_for_stack(self, stack):
@@ -1653,16 +2136,25 @@ class FcpxOtio:
 
     def _ensure_format(self, format_attrs, rate, fallback_name):
         attrs = dict(format_attrs)
+        preserved_format_id = attrs.pop("id", "")
         attrs.setdefault("name", fallback_name or "FFVideoFormatRateUndefined")
         if "frameDuration" not in attrs and rate in FRAMERATE_FRAMEDURATION:
             attrs["frameDuration"] = FRAMERATE_FRAMEDURATION[float(rate)]
         key = tuple(sorted(attrs.items()))
         if key in self.format_ids:
             return self.format_ids[key]
-        format_id = self._resource_id_generator()
+        format_id = preserved_format_id or self._resource_id_generator()
+        existing_format = self._resource_with_id(format_id)
+        if existing_format is not None and existing_format.tag == "format":
+            self.format_ids[key] = format_id
+            self.used_resource_ids.add(format_id)
+            return format_id
+        if existing_format is not None:
+            format_id = self._resource_id_generator()
         attrs["id"] = format_id
-        cElementTree.SubElement(self.resource_element, "format", attrs)
+        cElementTree.SubElement(self._ensure_resource_element(), "format", attrs)
         self.format_ids[key] = format_id
+        self.used_resource_ids.add(format_id)
         return format_id
 
     def _available_range_for_clip(self, clip):
@@ -1709,8 +2201,12 @@ class FcpxOtio:
         return float(rate / total)
 
     def _resource_id_generator(self):
-        self.resource_count += 1
-        return f"r{self.resource_count}"
+        while True:
+            self.resource_count += 1
+            candidate = f"r{self.resource_count}"
+            if candidate in self.used_resource_ids:
+                continue
+            return candidate
 
 
 def read_from_string(input_str):
