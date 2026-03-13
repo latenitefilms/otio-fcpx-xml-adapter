@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE fcpxml>
+
+<fcpxml version="1.14">
+    <resources>
+        <format id="r1" name="FFVideoFormat1080p2398" frameDuration="1001/24000s" width="1920" height="1080"/>
+        <asset id="r2" name="Clip_Event1" uid="EVT1CLIP01" start="0s" duration="240240/24000s" hasVideo="1" format="r1" hasAudio="1" src="file:///Volumes/Media/Clip_Event1.mov"/>
+        <asset id="r3" name="Clip_Event2" uid="EVT2CLIP01" start="0s" duration="120120/24000s" hasVideo="1" format="r1" hasAudio="1" src="file:///Volumes/Media/Clip_Event2.mov"/>
+    </resources>
+    <library location="file:///Volumes/Media/TestLibrary.fcpbundle/">
+        <event name="Event_One">
+            <project name="Project_In_Event1" uid="PROJ-EVT1-001">
+                <sequence format="r1" duration="240240/24000s" tcStart="0s" tcFormat="NDF">
+                    <spine>
+                        <asset-clip name="Clip_Event1" offset="0s" ref="r2" duration="240240/24000s" tcFormat="NDF"/>
+                    </spine>
+                </sequence>
+            </project>
+        </event>
+        <event name="Event_Two">
+            <project name="Project_In_Event2" uid="PROJ-EVT2-001">
+                <sequence format="r1" duration="120120/24000s" tcStart="0s" tcFormat="NDF">
+                    <spine>
+                        <asset-clip name="Clip_Event2" offset="0s" ref="r3" duration="120120/24000s" tcFormat="NDF"/>
+                    </spine>
+                </sequence>
+            </project>
+        </event>
+    </library>
+</fcpxml>

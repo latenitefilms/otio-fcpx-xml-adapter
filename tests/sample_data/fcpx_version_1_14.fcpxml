@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE fcpxml>
+
+<fcpxml version="1.14">
+    <resources>
+        <format id="r1" name="FFVideoFormat1080p2398" frameDuration="1001/24000s" width="1920" height="1080" colorSpace="1-1-1 (Rec. 709)"/>
+        <asset id="r2" name="TestClip_A" uid="AAAA0001" start="978249272/24000s" duration="4007003/24000s" hasVideo="1" format="r1" hasAudio="1">
+            <media-rep kind="original-media" sig="AAAA0001" src="file:///Volumes/Media/TestClip_A.mov"/>
+        </asset>
+        <asset id="r3" name="TestClip_B" uid="AAAA0002" start="0s" duration="240240/24000s" hasVideo="1" format="r1" hasAudio="1">
+            <media-rep kind="original-media" sig="AAAA0002" src="file:///Volumes/Media/TestClip_B.mov"/>
+        </asset>
+    </resources>
+    <project name="Version_Test_Project" uid="TEST-VERSION-001">
+        <sequence format="r1" duration="4247243/24000s" tcStart="0s" tcFormat="NDF" audioLayout="stereo" audioRate="48k">
+            <spine>
+                <clip offset="0s" name="TestClip_A" start="978249272/24000s" duration="4007003/24000s" tcFormat="NDF">
+                    <video ref="r2" offset="978249272/24000s" start="978249272/24000s" duration="4007003/24000s"/>
+                </clip>
+                <clip offset="4007003/24000s" name="TestClip_B_Disabled" start="0s" duration="240240/24000s" enabled="0" tcFormat="NDF">
+                    <video ref="r3" offset="0s" start="0s" duration="240240/24000s"/>
+                </clip>
+            </spine>
+        </sequence>
+    </project>
+</fcpxml>
