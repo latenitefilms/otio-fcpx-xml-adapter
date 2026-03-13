@@ -65,13 +65,23 @@ Write code that another strong engineer can quickly understand, safely extend, a
 
 - You can find an example of a complex Final Cut Pro Library FCPXML here: `LLM Resources/Example of Complex Library FCPXML.fcpxml`.
 
+- You can find various real-world FCPXML examples in:
+
+    - `llm-resources/SampleFCPXMLs`
+
 - You can use `https://sosumi.ai/mcp` to read official Apple documentation - for example: `https://sosumi.ai/documentation/professional-video-applications/import-options`
 
 ---
 
 ## Your Task
 
-I want you to come up with a sensible plan to make the OpenTimelineIO FCPXML Adapter feature complete for FCPXML v1.14 (with the eventual plan to support FCPXML v1.5 onwards).
+We have added FCPXML v1.14 support to the OpenTimelineIO FCPXML Adapter.
+
+We should now make sure we fully support FCPXML v1.0 onwards, using the DTDs.
+
+The OpenTimelineIO FCPXML Adapter should fully support the FCPXML, assuming there's equivalent calls in OpenTimelineIO itself.
+
+I want you to come up with a sensible plan to make the OpenTimelineIO FCPXML Adapter feature complete for all versions of FCPXML.
 
 We should do test-based development.
 
