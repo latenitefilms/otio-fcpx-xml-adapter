@@ -23,9 +23,8 @@ from otio_fcpxml_adapter.fcpxml import (
 
 
 TEST_DIR = Path(__file__).resolve().parent
-ROOT_DIR = TEST_DIR.parent
 SAMPLE_DIR = TEST_DIR / "sample_data"
-DTD_DIR = ROOT_DIR / "llm-resources" / "DTDs"
+DTD_DIR = SAMPLE_DIR / "DTDs"
 
 SAMPLE_LIBRARY_XML = SAMPLE_DIR / "fcpx_library.fcpxml"
 SAMPLE_PROJECT_XML = SAMPLE_DIR / "fcpx_project.fcpxml"
@@ -34,19 +33,37 @@ SAMPLE_CLIPS_XML = SAMPLE_DIR / "fcpx_clips.fcpxml"
 SAMPLE_VERSION_1_14_XML = SAMPLE_DIR / "fcpx_version_1_14.fcpxml"
 SAMPLE_MULTI_EVENT_LIBRARY_XML = SAMPLE_DIR / "fcpx_multi_event_library.fcpxml"
 SAMPLE_TRANSITIONS_XML = SAMPLE_DIR / "fcpx_transitions.fcpxml"
-SAMPLE_FCPXMLS_DIR = ROOT_DIR / "llm-resources" / "SampleFCPXMLs"
-SAMPLE_FCPXML_FIXTURES = sorted(SAMPLE_FCPXMLS_DIR.glob("*.fcpxml"))
-SAMPLE_LIBRARY_PACKAGE = SAMPLE_FCPXMLS_DIR / "Test Library.fcpxmld"
+SAMPLE_FCPXMLS_DIR = SAMPLE_DIR
+CORPUS_EXCLUDED_FIXTURES = {
+    "Dragged FCP Event.fcpxml",
+    "Dragged FCP Library.fcpxml",
+    "Dragged FCP Project.fcpxml",
+    "Dragged FCPXML Clips.fcpxml",
+    "Dragged FCPXML Events.fcpxml",
+    "Example of Complex Library FCPXML.fcpxml",
+    "fcpx_clips.fcpxml",
+    "fcpx_event.fcpxml",
+    "fcpx_example.fcpxml",
+    "fcpx_library.fcpxml",
+    "fcpx_multi_event_library.fcpxml",
+    "fcpx_project.fcpxml",
+    "fcpx_transitions.fcpxml",
+    "fcpx_version_1_14.fcpxml",
+}
+SAMPLE_FCPXML_FIXTURES = sorted(
+    path
+    for path in SAMPLE_FCPXMLS_DIR.glob("*.fcpxml")
+    if path.name not in CORPUS_EXCLUDED_FIXTURES
+)
+SAMPLE_LIBRARY_PACKAGE = SAMPLE_DIR / "Test Library.fcpxmld"
 SAMPLE_LIBRARY_PACKAGE_INFO_XML = SAMPLE_LIBRARY_PACKAGE / "Info.fcpxml"
 
-DRAGGED_EVENT_XML = ROOT_DIR / "llm-resources" / "Dragged FCP Event.fcpxml"
-DRAGGED_LIBRARY_XML = ROOT_DIR / "llm-resources" / "Dragged FCP Library.fcpxml"
-DRAGGED_PROJECT_XML = ROOT_DIR / "llm-resources" / "Dragged FCP Project.fcpxml"
-DRAGGED_CLIPS_XML = ROOT_DIR / "llm-resources" / "Dragged FCPXML Clips.fcpxml"
-DRAGGED_EVENTS_XML = ROOT_DIR / "llm-resources" / "Dragged FCPXML Events.fcpxml"
-COMPLEX_LIBRARY_XML = (
-    ROOT_DIR / "llm-resources" / "Example of Complex Library FCPXML.fcpxml"
-)
+DRAGGED_EVENT_XML = SAMPLE_DIR / "Dragged FCP Event.fcpxml"
+DRAGGED_LIBRARY_XML = SAMPLE_DIR / "Dragged FCP Library.fcpxml"
+DRAGGED_PROJECT_XML = SAMPLE_DIR / "Dragged FCP Project.fcpxml"
+DRAGGED_CLIPS_XML = SAMPLE_DIR / "Dragged FCPXML Clips.fcpxml"
+DRAGGED_EVENTS_XML = SAMPLE_DIR / "Dragged FCPXML Events.fcpxml"
+COMPLEX_LIBRARY_XML = SAMPLE_DIR / "Example of Complex Library FCPXML.fcpxml"
 
 EXPECTED_VIDEO_SIGNATURES = [
     [
