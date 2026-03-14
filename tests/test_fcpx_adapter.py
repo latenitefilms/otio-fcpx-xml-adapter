@@ -15,7 +15,7 @@ import xml.etree.ElementTree as ET
 import opentimelineio as otio
 import pytest
 
-from otio_fcpx_xml_adapter.fcpx_xml import (
+from otio_fcpxml_adapter.fcpxml import (
     META_NAMESPACE,
     SUPPORTED_VERSIONS,
     format_name,
@@ -36,6 +36,8 @@ SAMPLE_MULTI_EVENT_LIBRARY_XML = SAMPLE_DIR / "fcpx_multi_event_library.fcpxml"
 SAMPLE_TRANSITIONS_XML = SAMPLE_DIR / "fcpx_transitions.fcpxml"
 SAMPLE_FCPXMLS_DIR = ROOT_DIR / "llm-resources" / "SampleFCPXMLs"
 SAMPLE_FCPXML_FIXTURES = sorted(SAMPLE_FCPXMLS_DIR.glob("*.fcpxml"))
+SAMPLE_LIBRARY_PACKAGE = SAMPLE_FCPXMLS_DIR / "Test Library.fcpxmld"
+SAMPLE_LIBRARY_PACKAGE_INFO_XML = SAMPLE_LIBRARY_PACKAGE / "Info.fcpxml"
 
 DRAGGED_EVENT_XML = ROOT_DIR / "llm-resources" / "Dragged FCP Event.fcpxml"
 DRAGGED_LIBRARY_XML = ROOT_DIR / "llm-resources" / "Dragged FCP Library.fcpxml"
@@ -82,11 +84,15 @@ def read_fcpx_file(path):
 
 
 def read_fcpx_string(xml_string):
-    return otio.adapters.read_from_string(xml_string, "fcpx_xml")
+    return otio.adapters.read_from_string(xml_string, "fcpxml")
 
 
 def write_fcpx(obj, **kwargs):
-    return otio.adapters.write_to_string(obj, "fcpx_xml", **kwargs)
+    return otio.adapters.write_to_string(obj, "fcpxml", **kwargs)
+
+
+def write_otio_json(obj):
+    return otio.adapters.write_to_string(obj, "otio_json")
 
 
 def first_timeline(obj):
@@ -1006,6 +1012,32 @@ def test_complex_library_smoke_read_and_write_validate(complex_library):
 
     xml_string = write_fcpx(complex_library)
     assert_v114_valid(xml_string)
+
+
+def test_reads_fcpxmld_package_via_info_fcpxml():
+    packaged = read_fcpx_file(SAMPLE_LIBRARY_PACKAGE)
+    unpackaged = read_fcpx_file(SAMPLE_LIBRARY_PACKAGE_INFO_XML)
+
+    assert type(packaged) is type(unpackaged)
+    assert write_otio_json(packaged) == write_otio_json(unpackaged)
+
+
+def test_write_to_fcpxmld_creates_package_with_info_file(tmp_path):
+    timeline = make_video_timeline("Packaged", make_external_clip("Clip_A"))
+    package_path = tmp_path / "Packaged.fcpxmld"
+
+    result_path = otio.adapters.write_to_file(timeline, package_path, fcpxml_version="1.14")
+
+    assert Path(result_path) == package_path
+    assert package_path.is_dir()
+    info_path = package_path / "Info.fcpxml"
+    assert info_path.is_file()
+    assert_v114_valid(info_path.read_text(encoding="utf-8"))
+
+    roundtrip = read_fcpx_file(package_path)
+    roundtrip_timeline = first_timeline(roundtrip)
+    assert roundtrip_timeline.name == "Packaged"
+    assert first_non_gap(roundtrip_timeline.video_tracks()[0]).name == "Clip_A"
 
 
 @pytest.mark.parametrize("fixture_path", SAMPLE_FCPXML_FIXTURES)

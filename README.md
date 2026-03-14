@@ -7,6 +7,11 @@ The `FCPXML` adapter is part of OpenTimelineIO's contrib adapter plugins.
 
 It provides reading and writing of Final Cut Pro formatted XML files.
 
+Supported inputs and outputs:
+
+- `.fcpxml` files
+- `.fcpxmld` packages, using `Info.fcpxml` as the document entrypoint
+
 For more information on the FCPXML format please check the links in the [reference](#fcpx-xml-references) section.
 
 ---
@@ -53,6 +58,11 @@ The following features of OTIO are supported by the `FCPXML` adapter:
 
 The adapter currently supports reading and writing FCPXML `v1.0` through `v1.14`.
 
+It supports both standard `.fcpxml` documents and `.fcpxmld` packages. When
+reading a package, the adapter loads `Info.fcpxml`. When writing to a
+`.fcpxmld` path, the adapter creates the package directory and writes the XML to
+`Info.fcpxml`.
+
 The writer is version-aware and adjusts output for differences such as:
 
 - Root/library/project structure
@@ -75,6 +85,7 @@ The suite includes:
 - version-specific fixture coverage across supported FCPXML releases
 - DTD validation with `xmllint` when it is available
 - a real-world sample corpus roundtrip over `llm-resources/SampleFCPXMLs`
+- `.fcpxmld` package read/write coverage using `Info.fcpxml`
 
 The sample corpus test reads each sample, writes it back using the original
 FCPXML version, re-reads the result, and asserts that the roundtrip does not

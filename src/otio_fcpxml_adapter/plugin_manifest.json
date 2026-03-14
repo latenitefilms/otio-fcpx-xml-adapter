@@ -5,7 +5,7 @@
             "OTIO_SCHEMA": "Adapter.1",
             "name": "fcpxml",
             "filepath": "fcpxml.py",
-            "suffixes": ["fcpxml"]
+            "suffixes": ["fcpxml", "fcpxmld"]
         }
     ]
 }

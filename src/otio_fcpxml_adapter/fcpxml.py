@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import copy
 import os
+from pathlib import Path
 import re
 import subprocess
 from fractions import Fraction
@@ -29,6 +30,7 @@ REF_CLIP_VERSION_MIN = "1.2"
 ASSET_CLIP_VERSION_MIN = "1.6"
 SYNC_CLIP_VERSION_MIN = "1.6"
 MEDIA_REP_VERSION_MIN = "1.9"
+FCPXMLD_INFO_FILENAME = "Info.fcpxml"
 
 STORY_ITEM_TAGS = {
     "clip",
@@ -116,6 +118,30 @@ def _version_at_least(version, minimum_version):
 
 def _version_at_most(version, maximum_version):
     return _version_key(version) <= _version_key(maximum_version)
+
+
+def _package_info_path(package_path):
+    if not package_path.exists():
+        raise FileNotFoundError(f"FCPXML package does not exist: '{package_path}'.")
+    if not package_path.is_dir():
+        raise NotADirectoryError(
+            f"FCPXML package path is not a directory: '{package_path}'."
+        )
+
+    info_path = package_path / FCPXMLD_INFO_FILENAME
+    if not info_path.is_file():
+        raise FileNotFoundError(
+            f"FCPXML package is missing '{FCPXMLD_INFO_FILENAME}': '{package_path}'."
+        )
+
+    return info_path
+
+
+def _readable_fcpx_path(filepath):
+    path = Path(filepath)
+    if path.is_dir() or path.suffix.lower() == ".fcpxmld":
+        return _package_info_path(path)
+    return path
 
 
 def format_name(frame_rate, path):
@@ -1366,7 +1392,7 @@ class FcpxOtio:
             else:
                 self._append_collection(self.input_otio, self.fcpx_xml)
         else:
-            raise TypeError("Unsupported OTIO root type for fcpx_xml adapter.")
+            raise TypeError("Unsupported OTIO root type for fcpxml adapter.")
 
         xml = cElementTree.tostring(self.fcpx_xml, encoding="UTF-8", method="xml")
         dom = minidom.parseString(xml)
@@ -2458,7 +2484,41 @@ def read_from_string(input_str):
     return FcpxXml(input_str).to_otio()
 
 
+def read_from_file(filepath):
+    """OTIO adapter entrypoint."""
+
+    return read_from_string(_readable_fcpx_path(filepath).read_text(encoding="utf-8"))
+
+
 def write_to_string(input_otio, fcpxml_version=SUPPORTED_WRITE_VERSION):
     """OTIO adapter entrypoint."""
 
     return FcpxOtio(input_otio, fcpxml_version=fcpxml_version).to_xml()
+
+
+def write_to_file(input_otio, filepath, fcpxml_version=SUPPORTED_WRITE_VERSION):
+    """OTIO adapter entrypoint."""
+
+    output_path = Path(filepath)
+    xml_string = write_to_string(input_otio, fcpxml_version=fcpxml_version)
+
+    if output_path.suffix.lower() == ".fcpxmld":
+        if output_path.exists():
+            raise FileExistsError(f"'{output_path}' exists, will not overwrite.")
+        if not output_path.parent.exists():
+            raise FileNotFoundError(
+                f"Directory '{output_path.parent}' does not exist, cannot create "
+                f"'{output_path}'."
+            )
+        if not output_path.parent.is_dir():
+            raise NotADirectoryError(
+                f"'{output_path.parent}' is not a directory, cannot create "
+                f"'{output_path}'."
+            )
+
+        output_path.mkdir()
+        (output_path / FCPXMLD_INFO_FILENAME).write_text(xml_string, encoding="utf-8")
+        return str(output_path)
+
+    output_path.write_text(xml_string, encoding="utf-8")
+    return str(output_path)
