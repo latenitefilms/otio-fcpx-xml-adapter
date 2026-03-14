@@ -2,6 +2,9 @@
 # Copyright Contributors to the OpenTimelineIO project
 
 from pathlib import Path
+from collections import Counter
+import copy
+import re
 import shutil
 import subprocess
 import tempfile
@@ -31,6 +34,8 @@ SAMPLE_CLIPS_XML = SAMPLE_DIR / "fcpx_clips.fcpxml"
 SAMPLE_VERSION_1_14_XML = SAMPLE_DIR / "fcpx_version_1_14.fcpxml"
 SAMPLE_MULTI_EVENT_LIBRARY_XML = SAMPLE_DIR / "fcpx_multi_event_library.fcpxml"
 SAMPLE_TRANSITIONS_XML = SAMPLE_DIR / "fcpx_transitions.fcpxml"
+SAMPLE_FCPXMLS_DIR = ROOT_DIR / "llm-resources" / "SampleFCPXMLs"
+SAMPLE_FCPXML_FIXTURES = sorted(SAMPLE_FCPXMLS_DIR.glob("*.fcpxml"))
 
 DRAGGED_EVENT_XML = ROOT_DIR / "llm-resources" / "Dragged FCP Event.fcpxml"
 DRAGGED_LIBRARY_XML = ROOT_DIR / "llm-resources" / "Dragged FCP Library.fcpxml"
@@ -108,6 +113,55 @@ def dtd_path_for_version(version):
     return DTD_DIR / "FCPXMLv{}.dtd".format(version.replace(".", "_"))
 
 
+def _xmllint_result_for_path(path, version):
+    xmllint = shutil.which("xmllint")
+    if not xmllint:
+        pytest.skip("xmllint is required for DTD validation")
+
+    return subprocess.run(
+        [xmllint, "--noout", "--dtdvalid", str(dtd_path_for_version(version)), str(path)],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+
+def _normalized_validation_errors(stderr):
+    errors = Counter()
+    for line in stderr.splitlines():
+        if "validity error :" not in line:
+            continue
+        errors[re.sub(r"^.*?validity error :\s*", "", line)] += 1
+    return errors
+
+
+def validation_errors_for_path(path, version):
+    return _normalized_validation_errors(_xmllint_result_for_path(path, version).stderr)
+
+
+def validation_errors_for_string(xml_string, version):
+    xmllint = shutil.which("xmllint")
+    if not xmllint:
+        pytest.skip("xmllint is required for DTD validation")
+
+    with tempfile.NamedTemporaryFile(
+        "w", suffix=".fcpxml", delete=False, encoding="utf-8"
+    ) as handle:
+        handle.write(xml_string)
+        temp_path = Path(handle.name)
+
+    try:
+        result = _xmllint_result_for_path(temp_path, version)
+    finally:
+        temp_path.unlink(missing_ok=True)
+
+    return _normalized_validation_errors(result.stderr)
+
+
+def version_for_xml_path(path):
+    return ET.parse(path).getroot().get("version")
+
+
 def assert_valid_for_version(xml_string, version):
     xmllint = shutil.which("xmllint")
     if not xmllint:
@@ -120,12 +174,7 @@ def assert_valid_for_version(xml_string, version):
         temp_path = Path(handle.name)
 
     try:
-        result = subprocess.run(
-            [xmllint, "--noout", "--dtdvalid", str(dtd_path_for_version(version)), str(temp_path)],
-            capture_output=True,
-            text=True,
-            check=False,
-        )
+        result = _xmllint_result_for_path(temp_path, version)
     finally:
         temp_path.unlink(missing_ok=True)
 
@@ -570,6 +619,100 @@ def test_title_generator_write_roundtrip_and_validate():
     assert clip.media_reference.generator_kind == "fcpx.title"
 
 
+def test_title_generator_places_text_before_intrinsic_adjustments():
+    title_clip = otio.schema.Clip(
+        name="Ordered Title",
+        media_reference=otio.schema.GeneratorReference(
+            name="Basic Title",
+            generator_kind="fcpx.title",
+            parameters={
+                "effect_name": "Basic Title",
+                "effect_uid": "basic-title",
+                "effect_src": "file:///Applications/Final Cut Pro.app/Basic%20Title.moti",
+                "param_xml": [
+                    '<param name="Position" key="9999/1/100" value="0 0"/>'
+                ],
+                "text_xml": [
+                    '<text><text-style ref="ts1">Hello</text-style></text>'
+                ],
+                "text_style_def_xml": [
+                    '<text-style-def id="ts1"><text-style font="Helvetica" fontSize="64"/></text-style-def>'
+                ],
+            },
+        ),
+        source_range=otio.opentime.TimeRange(
+            start_time=otio.opentime.RationalTime(0, 24),
+            duration=otio.opentime.RationalTime(48, 24),
+        ),
+        metadata={META_NAMESPACE: {"note": "Keep order"}},
+    )
+    title_clip.effects.append(
+        otio.schema.Effect(
+            name="adjust-transform",
+            effect_name="adjust-transform",
+            metadata={
+                META_NAMESPACE: {
+                    "element": "adjust-transform",
+                    "attrs": {"position": "10 20", "scale": "1.0 1.0"},
+                    "params": [],
+                    "raw_children": [],
+                }
+            },
+        )
+    )
+    timeline = make_video_timeline("TitleOrder", title_clip)
+
+    xml_string = write_fcpx(timeline, fcpxml_version="1.11")
+    assert_valid_for_version(xml_string, "1.11")
+
+    title_element = ET.fromstring(xml_string).find(".//title")
+    assert title_element is not None
+    assert [child.tag for child in list(title_element)[:5]] == [
+        "param",
+        "text",
+        "text-style-def",
+        "note",
+        "adjust-transform",
+    ]
+
+
+def test_title_generator_rewrites_text_style_ids_per_instance():
+    first_title = otio.schema.Clip(
+        name="Title One",
+        media_reference=otio.schema.GeneratorReference(
+            name="Basic Title",
+            generator_kind="fcpx.title",
+            parameters={
+                "effect_name": "Basic Title",
+                "effect_uid": "basic-title",
+                "effect_src": "file:///Applications/Final Cut Pro.app/Basic%20Title.moti",
+                "text_xml": [
+                    '<text><text-style ref="ts1">One</text-style></text>'
+                ],
+                "text_style_def_xml": [
+                    '<text-style-def id="ts1"><text-style font="Helvetica" fontSize="64"/></text-style-def>'
+                ],
+            },
+        ),
+        source_range=otio.opentime.TimeRange(
+            start_time=otio.opentime.RationalTime(0, 24),
+            duration=otio.opentime.RationalTime(48, 24),
+        ),
+    )
+    second_title = copy.deepcopy(first_title)
+    second_title.name = "Title Two"
+    timeline = make_video_timeline("TitleIds", first_title, second_title)
+
+    xml_string = write_fcpx(timeline, fcpxml_version="1.8")
+    assert_valid_for_version(xml_string, "1.8")
+
+    title_elements = ET.fromstring(xml_string).findall(".//title")
+    assert [title.find("./text-style-def").get("id") for title in title_elements] == [
+        "ts_otio_1",
+        "ts_otio_2",
+    ]
+
+
 def test_sync_clip_read_from_complex_sample(complex_library):
     sync_clips = [
         stack
@@ -863,3 +1006,24 @@ def test_complex_library_smoke_read_and_write_validate(complex_library):
 
     xml_string = write_fcpx(complex_library)
     assert_v114_valid(xml_string)
+
+
+@pytest.mark.parametrize("fixture_path", SAMPLE_FCPXML_FIXTURES)
+def test_sample_corpus_roundtrip_does_not_add_new_validation_errors(fixture_path):
+    version = version_for_xml_path(fixture_path)
+    original_errors = validation_errors_for_path(fixture_path, version)
+
+    obj = read_fcpx_file(fixture_path)
+    xml_string = write_fcpx(obj, fcpxml_version=version)
+    assert ET.fromstring(xml_string).get("version") == version
+
+    roundtrip = read_fcpx_string(xml_string)
+    assert roundtrip is not None
+
+    roundtrip_errors = validation_errors_for_string(xml_string, version)
+    regressions = {
+        message: count - original_errors[message]
+        for message, count in roundtrip_errors.items()
+        if count > original_errors[message]
+    }
+    assert not regressions, regressions

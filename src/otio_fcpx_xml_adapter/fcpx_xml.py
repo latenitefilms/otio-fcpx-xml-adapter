@@ -57,6 +57,27 @@ MARKER_TAGS = {
 FILTER_TAG_PREFIXES = ("filter-", "adjust-")
 FRAME_DURATION_RE = re.compile(r"(\d+(?:\.\d+)?)/(\d+(?:\.\d+)?)s")
 FORMAT_RATE_RE = re.compile(r"p(\d+(?:\.\d+)?)$")
+LANE_CAPABLE_TAGS = {
+    "clip",
+    "mc-clip",
+    "audition",
+    "asset-clip",
+    "ref-clip",
+    "sync-clip",
+    "title",
+    "video",
+    "audio",
+    "live-drawing",
+}
+AUDIO_SOURCE_ENHANCEMENT_ORDER = (
+    "adjust-loudness",
+    "adjust-noiseReduction",
+    "adjust-humReduction",
+    "adjust-EQ",
+    "adjust-matchEQ",
+    "adjust-voiceIsolation",
+)
+AUDIO_SOURCE_INTRINSIC_ORDER = ("adjust-volume", "adjust-panner")
 
 FRAMERATE_FRAMEDURATION = {
     23.98: "1001/24000s",
@@ -187,6 +208,50 @@ def _raw_xml(element):
 def _append_raw_xml(parent, raw_xml_strings):
     for raw_xml in raw_xml_strings or []:
         parent.append(cElementTree.fromstring(raw_xml))
+
+
+def _normalize_audio_source_xml(raw_xml_strings):
+    normalized_xml = []
+    for raw_xml in raw_xml_strings or []:
+        element = cElementTree.fromstring(raw_xml)
+        if element.tag not in {"audio-channel-source", "audio-role-source"}:
+            normalized_xml.append(raw_xml)
+            continue
+
+        children = list(element)
+        if not children:
+            normalized_xml.append(raw_xml)
+            continue
+
+        ordered_children = []
+        remaining = list(children)
+
+        for tag in AUDIO_SOURCE_ENHANCEMENT_ORDER + AUDIO_SOURCE_INTRINSIC_ORDER:
+            matching = [child for child in remaining if child.tag == tag]
+            ordered_children.extend(matching)
+            remaining = [child for child in remaining if child.tag != tag]
+
+        filter_audio = [child for child in remaining if child.tag == "filter-audio"]
+        mute = [child for child in remaining if child.tag == "mute"]
+        leftovers = [
+            child
+            for child in remaining
+            if child.tag not in {"filter-audio", "mute"}
+        ]
+        ordered_children.extend(filter_audio)
+        ordered_children.extend(mute)
+        ordered_children.extend(leftovers)
+
+        if [child.tag for child in ordered_children] == [child.tag for child in children]:
+            normalized_xml.append(raw_xml)
+            continue
+
+        normalized_element = cElementTree.Element(element.tag, dict(element.attrib))
+        for child in ordered_children:
+            normalized_element.append(copy.deepcopy(child))
+        normalized_xml.append(_raw_xml(normalized_element))
+
+    return normalized_xml
 
 
 def _copy_attrib(element, *excluded_keys):
@@ -1053,9 +1118,12 @@ class FcpxXml:
 
             if element.tag in {"asset-clip", "video", "audio"} and element.get("ref"):
                 asset = self.resources.assets.get(element.get("ref"))
-                append_resource(asset)
-                if asset is not None and asset.get("format"):
-                    append_resource(self.resources.formats.get(asset.get("format")))
+                if asset is not None:
+                    append_resource(asset)
+                    if asset.get("format"):
+                        append_resource(self.resources.formats.get(asset.get("format")))
+                else:
+                    append_resource(self.resources.effects.get(element.get("ref")))
             elif element.tag == "clip":
                 asset_id = self._reference_id_for_story(element)
                 asset = self.resources.assets.get(asset_id or "")
@@ -1282,6 +1350,7 @@ class FcpxOtio:
         self.asset_ids = {}
         self.effect_ids = {}
         self.media_ids = {}
+        self.text_style_id_count = 0
 
     def to_xml(self):
         if isinstance(self.input_otio, otio.schema.Timeline):
@@ -1473,17 +1542,141 @@ class FcpxOtio:
                 spine_element.append(self._element_for_track_item(item, default_format_id))
             return
 
+        for segment in self._non_gap_track_segments(items):
+            if not any(isinstance(item, otio.schema.Transition) for item in segment):
+                for item in segment:
+                    item_element = self._element_for_track_item(item, default_format_id)
+                    if item_element.tag not in LANE_CAPABLE_TAGS:
+                        continue
+                    item_element.set("lane", str(lane_id))
+                    spine_element.append(item_element)
+                continue
+            self._append_storyline_segment(
+                track,
+                segment,
+                spine_element,
+                lane_id,
+                default_format_id,
+            )
+
+    @staticmethod
+    def _non_gap_track_segments(items):
+        segments = []
+        current_segment = []
         for item in items:
-            absolute_start = track.trimmed_range_of_child(item).start_time
-            parent_element = self._find_parent_element(spine_element, absolute_start, default_format_id)
-            item_element = self._element_for_track_item(item, default_format_id)
-            if parent_element is None:
+            if isinstance(item, otio.schema.Gap):
+                if current_segment:
+                    segments.append(current_segment)
+                    current_segment = []
+                continue
+            current_segment.append(item)
+        if current_segment:
+            segments.append(current_segment)
+        return segments
+
+    def _append_storyline_segment(
+        self,
+        track,
+        segment,
+        spine_element,
+        lane_id,
+        default_format_id,
+    ):
+        anchor_start = self._segment_anchor_time(track, segment)
+        parent_element = self._find_parent_element(
+            spine_element,
+            anchor_start,
+            default_format_id,
+        )
+        if parent_element is None:
+            parent_element = self._find_fallback_parent_element(
+                spine_element,
+                anchor_start,
+                default_format_id,
+            )
+
+        if parent_element is None:
+            for item in segment:
+                if isinstance(item, otio.schema.Transition):
+                    continue
+                item_element = self._element_for_track_item(item, default_format_id)
+                if item_element.tag not in LANE_CAPABLE_TAGS:
+                    continue
                 item_element.set("lane", str(lane_id))
                 spine_element.append(item_element)
-                continue
-            nested_spine = self._find_or_create_nested_spine(parent_element, lane_id)
-            self._set_relative_offset(item_element, absolute_start, parent_element, default_format_id)
+            return
+
+        nested_spine = self._find_or_create_nested_spine(parent_element, lane_id)
+        for item in segment:
+            item_element = self._element_for_track_item(item, default_format_id)
+            item_element.attrib.pop("lane", None)
+            self._set_storyline_child_offset(
+                item_element,
+                item,
+                track,
+                parent_element,
+                anchor_start,
+                default_format_id,
+            )
             nested_spine.append(item_element)
+
+    @staticmethod
+    def _track_item_start(track, item):
+        return track.trimmed_range_of_child(item).start_time
+
+    def _segment_anchor_time(self, track, segment):
+        anchor_item = next(
+            (item for item in segment if not isinstance(item, otio.schema.Transition)),
+            segment[0],
+        )
+        return self._track_item_start(track, anchor_item)
+
+    def _find_fallback_parent_element(self, spine_element, absolute_start, default_format_id):
+        fallback = None
+        first_candidate = None
+        for item in spine_element:
+            if item.tag == "transition" or item.get("lane") is not None:
+                continue
+            item_rate = self._element_rate(item, default_format_id)
+            item_offset = to_rational_time(item.get("offset", "0s"), item_rate)
+            if first_candidate is None:
+                first_candidate = item
+            if item_offset <= absolute_start:
+                fallback = item
+                continue
+            if fallback is not None:
+                break
+        return fallback or first_candidate
+
+    def _set_storyline_child_offset(
+        self,
+        item_element,
+        item,
+        track,
+        parent_element,
+        anchor_start,
+        default_format_id,
+    ):
+        if isinstance(item, otio.schema.Transition):
+            preserved_offset = (
+                item.metadata.get(META_NAMESPACE, {})
+                .get("transition", {})
+                .get("attrs", {})
+                .get("offset")
+            )
+            if preserved_offset:
+                item_element.set("offset", preserved_offset)
+                return
+
+        absolute_start = self._track_item_start(track, item)
+        if isinstance(item, otio.schema.Transition) and absolute_start < anchor_start:
+            absolute_start = anchor_start
+        self._set_relative_offset(
+            item_element,
+            absolute_start,
+            parent_element,
+            default_format_id,
+        )
 
     def _find_parent_element(self, spine_element, absolute_start, default_format_id):
         for item in spine_element:
@@ -1795,13 +1988,52 @@ class FcpxOtio:
         if clip.source_range is not None and clip.source_range.start_time.value != 0:
             attrs["start"] = from_rational_time(clip.source_range.start_time)
         element = cElementTree.Element("title", {k: v for k, v in attrs.items() if v != ""})
+        text_xml, text_style_def_xml = self._uniquify_title_text_style_ids(
+            parameters.get("text_xml"),
+            parameters.get("text_style_def_xml"),
+        )
         if _version_at_least(self.fcpxml_version, "1.3"):
             _append_raw_xml(element, parameters.get("param_xml"))
-        _append_raw_xml(element, parameters.get("text_xml"))
+        _append_raw_xml(element, text_xml)
         if _version_at_least(self.fcpxml_version, "1.3"):
-            _append_raw_xml(element, parameters.get("text_style_def_xml"))
-        self._append_common_children(element, clip)
+            _append_raw_xml(element, text_style_def_xml)
+        self._append_common_children(
+            element,
+            clip,
+            leading_children_position="append",
+        )
         return element
+
+    def _uniquify_title_text_style_ids(self, text_xml, text_style_def_xml):
+        text_xml = list(text_xml or [])
+        text_style_def_xml = list(text_style_def_xml or [])
+        if not text_xml or not text_style_def_xml:
+            return text_xml, text_style_def_xml
+
+        id_map = {}
+        remapped_defs = []
+        for raw_xml in text_style_def_xml:
+            text_style_def = cElementTree.fromstring(raw_xml)
+            original_id = text_style_def.get("id")
+            if original_id:
+                self.text_style_id_count += 1
+                new_id = f"ts_otio_{self.text_style_id_count}"
+                id_map[original_id] = new_id
+                text_style_def.set("id", new_id)
+            remapped_defs.append(_raw_xml(text_style_def))
+
+        if not id_map:
+            return text_xml, remapped_defs
+
+        remapped_text = []
+        for raw_xml in text_xml:
+            text_element = cElementTree.fromstring(raw_xml)
+            for text_style in text_element.findall(".//text-style"):
+                ref = text_style.get("ref")
+                if ref in id_map:
+                    text_style.set("ref", id_map[ref])
+            remapped_text.append(_raw_xml(text_element))
+        return remapped_text, remapped_defs
 
     def _append_common_children(
         self,
@@ -1809,6 +2041,7 @@ class FcpxOtio:
         item,
         include_markers=True,
         anchor_xml_keys=(),
+        leading_children_position="prepend",
     ):
         fcpx_meta = item.metadata.get(META_NAMESPACE, {})
         leading_children = []
@@ -1833,8 +2066,12 @@ class FcpxOtio:
             else:
                 trailing_filter_children.append(effect_element)
 
-        for child in reversed(leading_children):
-            element.insert(0, child)
+        if leading_children_position == "prepend":
+            for child in reversed(leading_children):
+                element.insert(0, child)
+        else:
+            for child in leading_children:
+                element.append(child)
 
         for key in anchor_xml_keys:
             _append_raw_xml(element, fcpx_meta.get(key))
@@ -1851,8 +2088,14 @@ class FcpxOtio:
                     cElementTree.SubElement(element, "rating", dict(rating))
 
         _append_raw_xml(element, fcpx_meta.get("legacy_audio_source_xml"))
-        _append_raw_xml(element, fcpx_meta.get("audio_channel_source_xml"))
-        _append_raw_xml(element, fcpx_meta.get("audio_role_source_xml"))
+        _append_raw_xml(
+            element,
+            _normalize_audio_source_xml(fcpx_meta.get("audio_channel_source_xml")),
+        )
+        _append_raw_xml(
+            element,
+            _normalize_audio_source_xml(fcpx_meta.get("audio_role_source_xml")),
+        )
         _append_raw_xml(element, fcpx_meta.get("sync_source_xml"))
 
         for filter_element in trailing_filter_children:
