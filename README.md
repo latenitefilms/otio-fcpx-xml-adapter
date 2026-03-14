@@ -73,6 +73,62 @@ The writer is version-aware and adjusts output for differences such as:
 
 ---
 
+## Example Usage
+
+### Convert FCPXML to Final Cut Pro 7 XML
+
+Whilst DaVinci Resolve can read both Final Cut Pro 7 XML and FCPXML, for the purposes of demonstration, we can use OpenTimelineIO to convert a FCPXML to a Final Cut Pro 7 XML:
+
+1. Read a `.fcpxml` or `.fcpxmld` package with this adapter
+2. Write the resulting OTIO object out using an OTIO `fcp_xml` adapter
+
+If your OTIO environment includes an `fcp_xml` adapter, you can do this from the command line with:
+
+```bash
+otioconvert \
+    -i "/path/to/input.fcpxml" \
+    -I fcpxml \
+    -o "/path/to/output.xml" \
+    -O fcp_xml
+```
+
+For a `.fcpxmld` package, point the input at the package directory:
+
+```bash
+otioconvert \
+    -i "/path/to/Library.fcpxmld" \
+    -I fcpxml \
+    -o "/path/to/output.xml" \
+    -O fcp_xml
+```
+
+You can do the same thing in Python:
+
+```python
+import opentimelineio as otio
+
+timeline = otio.adapters.read_from_file(
+    "/path/to/input.fcpxml",
+    adapter_name="fcpxml",
+)
+
+otio.adapters.write_to_file(
+    timeline,
+    "/path/to/output.xml",
+    adapter_name="fcp_xml",
+)
+```
+
+This repository provides the `fcpxml` adapter. Writing Final Cut Pro 7 XML requires an OTIO environment that also has an `fcp_xml` adapter installed.
+
+To see which adapters are available in your current OTIO installation, run:
+
+```bash
+python3 -c "import opentimelineio as otio; print(sorted(otio.adapters.available_adapter_names()))"
+```
+
+---
+
 ## Frequently Asked Questions
 
 ### How can I validate a FCPXML document?
