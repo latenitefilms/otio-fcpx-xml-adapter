@@ -75,6 +75,28 @@ The writer is version-aware and adjusts output for differences such as:
 
 ## Frequently Asked Questions
 
+### How can I validate a FCPXML document?
+
+macOS has a built in XML lint tool - allowing you to validate a `FCPXML` document against it's `DTD` file.
+
+A DTD (Document Type Definition) file is used in XML to define the structure and the legal elements and attributes of an XML document.
+
+It's a set of markup declarations that provide a rulebook for a specific type of XML document, describing what the document contains and how those elements and attributes are organised.
+
+You can download all the `FCPXML` `DTD` files on the [CommandPost Repository](https://github.com/CommandPost/CommandPost/tree/develop/src/extensions/cp/apple/fcpxml/dtd).
+
+You can then use this Terminal Command to validate things:
+
+```
+xmllint --dtdvalid "/path/to/FCPXMLv1_9.dtd" "/path/to/your/file.fcpxml"
+```
+
+You can just drag in a file from Finder into Terminal, and Terminal will write out the file's path.
+
+Simply type `xmllint --dtdvalid`, then drag in the `DTD` file from Finder, and then your `FCPXML` file.
+
+---
+
 ### Why does FCPXML use Rational Numbers?
 
 Final Cut Pro expresses time values as a rational number of seconds with a 64-bit numerator and a 32-bit denominator.
@@ -91,29 +113,19 @@ The structure can represent a specific numeric time in the media timeline, and c
 
 ---
 
-### Learning FCPXML
+### Where to learn about FCPXML?
 
 You can read [Demystifying Final Cut Pro XMLs by Philip Hodgetts and Gregory Clarke](https://fcp.cafe/developer-case-studies/fcpxml/) on FCP Cafe, which gives a fantastic introduction to FCPXML.
 
 ---
 
-### swift-daw-file-tools
+### What other FCPXML Tools Exist swift-daw-file-tools
 
 [Steffan Andrews](https://github.com/orchetect) has created an amazing Swift Framework called [swift-daw-file-tools](https://github.com/orchetect/swift-daw-file-tools), which can read and process FCPXML.
 
----
+[SwiftSecuencia](https://github.com/intrusive-memory/SwiftSecuencia) provides a type-safe, Swift-native API for creating and exporting media timelines. Build timelines programmatically and export to professional formats for Final Cut Pro, audio production, and more.
 
-### SwiftSecuencia
-
-SwiftSecuencia provides a type-safe, Swift-native API for creating and exporting media timelines. Build timelines programmatically and export to professional formats for Final Cut Pro, audio production, and more.
-
-You can learn more about [SwiftSecuencia](https://github.com/intrusive-memory/SwiftSecuencia).
-
----
-
-### Pipeline Neo (CLI & Library)
-
-**Pipeline Neo** is modern Swift 6 framework for working with Final Cut Pro's FCPXML with full concurrency support and SwiftTimecode integration. Pipeline Neo is a spiritual successor to the original [Pipeline](https://github.com/reuelk/pipeline), modernised for Swift 6.0 and contemporary development practices.
+[Pipeline Neo](https://github.com/TheAcharya/pipeline-neo) is modern Swift 6 framework for working with Final Cut Pro's FCPXML with full concurrency support and SwiftTimecode integration. Pipeline Neo is a spiritual successor to the original [Pipeline](https://github.com/reuelk/pipeline), modernised for Swift 6.0 and contemporary development practices.
 
 Pipeline Neo provides a comprehensive API for parsing, creating, and manipulating FCPXML files with advanced timecode operations, async/await patterns, and robust error handling. Built with Swift 6.0 and targeting macOS 12+, it offers type-safe operations, comprehensive test coverage, and seamless integration with SwiftTimecode for professional video editing workflows.
 
@@ -121,38 +133,13 @@ Pipeline Neo's codebase is derived from [swift-daw-file-tools](https://github.co
 
 This codebase is developed using AI agents.
 
-You can learn more about [Pipeline Neo](https://github.com/TheAcharya/pipeline-neo).
-
 ---
 
-### Preferred XML Editor
+### What's our preferred FCPXML Editor?
 
 I'm a massive fan of [BBEdit 14](https://www.barebones.com/products/bbedit/).
 
 It has a 30 day free trial, and is also available on the Mac App Store.
-
----
-
-### DTD Validation
-
-macOS has a built in XML lint tool - allowing you to validate a `FCPXML` document against it's `DTD` file.
-
-!!!primary What's a DTD?
-A DTD (Document Type Definition) file is used in XML to define the structure and the legal elements and attributes of an XML document. It's a set of markup declarations that provide a rulebook for a specific type of XML document, describing what the document contains and how those elements and attributes are organised.
-!!!
-
-You can download all the [`FCPXML` `DTD` files](https://github.com/CommandPost/CommandPost/tree/develop/src/extensions/cp/apple/fcpxml/dtd).
-
-You can then use this Terminal Command to validate things:
-
-```
-xmllint --dtdvalid "/path/to/FCPXMLv1_9.dtd" "/path/to/your/file.fcpxml"
-```
-
-!!!primary Tip!
-You can just drag in a file from Finder into Terminal, and Terminal will write out the file's path.<br />
-Simply type `xmllint --dtdvalid`, then drag in the `DTD` file from Finder, and then your `FCPXML` file.
-!!!
 
 ---
 
@@ -166,14 +153,12 @@ python3 -m pytest -q
 
 The suite includes:
 
-- version-specific fixture coverage across supported FCPXML releases
+- Version-specific fixture coverage across supported FCPXML releases
 - DTD validation with `xmllint` when it is available
-- a real-world sample corpus roundtrip over `llm-resources/SampleFCPXMLs`
+- A real-world sample corpus roundtrip over `tests/sample_data`
 - `.fcpxmld` package read/write coverage using `Info.fcpxml`
 
-The sample corpus test reads each sample, writes it back using the original
-FCPXML version, re-reads the result, and asserts that the roundtrip does not
-introduce new DTD validation errors relative to the source file.
+The sample corpus test reads each sample, writes it back using the original `FCPXML` version, re-reads the result, and asserts that the roundtrip does not introduce new DTD validation errors relative to the source file.
 
 ---
 
@@ -186,7 +171,7 @@ introduce new DTD validation errors relative to the source file.
 
 ## License
 
-OpenTimelineIO and the FCPXML adapter are open source software.
+OpenTimelineIO and the `FCPXML` adapter are open source software.
 
 Please see the [LICENSE](LICENSE.md) for details.
 
