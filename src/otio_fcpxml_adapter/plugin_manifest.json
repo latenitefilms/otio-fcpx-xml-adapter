@@ -3,8 +3,8 @@
     "adapters" : [
         {
             "OTIO_SCHEMA": "Adapter.1",
-            "name": "fcpx_xml",
-            "filepath": "fcpx_xml.py",
+            "name": "fcpxml",
+            "filepath": "fcpxml.py",
             "suffixes": ["fcpxml"]
         }
     ]
