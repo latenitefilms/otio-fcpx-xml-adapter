@@ -11,7 +11,7 @@ description = "OpenTimelineIO FCPXML Adapter"
 authors = [
   { name="Contributors to the OpenTimelineIO project", email="otio-discussion@lists.aswf.io" },
 ]
-license = { file="LICENSE" }
+license = { file="LICENSE.md" }
 readme = "README.md"
 requires-python = ">=3.7"
 dependencies = [
@@ -32,6 +32,7 @@ classifiers = [
     "Programming Language :: Python :: 3.9",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
     "Operating System :: OS Independent",
     "Natural Language :: English"
 ]
@@ -48,3 +49,4 @@ otio_fcpxml_adapter = "otio_fcpxml_adapter"
 # Ensure the sdist includes a setup.py for older pip versions
 support-legacy = true
 exclude = [".github"]
+        
